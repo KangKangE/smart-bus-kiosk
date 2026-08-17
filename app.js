@@ -198,6 +198,7 @@
     voiceSupported: true,
     testState: "idle",       // idle | testing | ok
     geminiTest: "idle",      // idle | testing | ok | fail
+    geminiErrorMsg: "",      // 연결 테스트 실패 시 구글이 보낸 실제 오류 메시지
     liveBuses: null,         // 실시간 도착 데이터 (프록시 연결 성공 시 시연 데이터 대신 사용)
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
@@ -793,6 +794,9 @@
             "</div>" +
             '<label>Gemini API 키<input data-field="geminiKey" type="password" placeholder="AIza..." value="' + esc(s.geminiKey || "") + '"></label>' +
             '<button class="test-button' + (state.geminiTest === "ok" ? " test-success" : state.geminiTest === "fail" ? " test-fail" : "") + '" data-action="gemini-test"' + (state.geminiTest === "testing" ? " disabled" : "") + ">" + geminiButtonHtml() + "</button>" +
+            (state.geminiTest === "fail" && state.geminiErrorMsg
+              ? '<p class="test-error">' + esc(state.geminiErrorMsg) + "</p>"
+              : "") +
           "</section>" +
         "</div>" +
         '<div class="settings-actions">' +
@@ -933,7 +937,8 @@
       case "gemini-test":
         if (!state.settings.geminiKey || !state.settings.geminiKey.trim()) {
           state.geminiTest = "fail";
-          updateGeminiButton();
+          state.geminiErrorMsg = "키를 입력해 주세요.";
+          render();
           break;
         }
         state.geminiTest = "testing";
@@ -942,11 +947,26 @@
           contents: [{ role: "user", parts: [{ text: "안녕" }] }],
           generationConfig: { maxOutputTokens: 5 }
         }).then(function (res) {
-          state.geminiTest = res.ok ? "ok" : "fail";
-          updateGeminiButton();
-        }).catch(function () {
+          if (res.ok) {
+            state.geminiTest = "ok";
+            state.geminiErrorMsg = "";
+            render();
+            return;
+          }
+          return res.json().then(function (e) {
+            state.geminiTest = "fail";
+            state.geminiErrorMsg = "오류 " + res.status + ": " +
+              (e && e.error && e.error.message ? e.error.message : "알 수 없는 오류");
+            render();
+          }, function () {
+            state.geminiTest = "fail";
+            state.geminiErrorMsg = "오류 " + res.status;
+            render();
+          });
+        }).catch(function (err) {
           state.geminiTest = "fail";
-          updateGeminiButton();
+          state.geminiErrorMsg = "네트워크 오류: " + err;
+          render();
         });
         break;
       case "save":
@@ -969,7 +989,10 @@
     }
     if (field === "geminiKey" && state.geminiTest !== "idle") {
       state.geminiTest = "idle";
+      state.geminiErrorMsg = "";
       updateGeminiButton();
+      var msgEl = document.querySelector(".test-error");
+      if (msgEl) msgEl.remove();
     }
   });
 

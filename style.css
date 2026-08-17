@@ -1010,6 +1010,17 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 .test-button:disabled { cursor: wait; opacity: .65; }
 .test-button.test-success { color: #0c7049; background: #e7f6ef; border-color: #159765; }
 .test-button.test-fail { color: #c52d3b; background: #fdecee; border-color: #c52d3b; }
+.test-error {
+  color: #c52d3b;
+  background: #fdecee;
+  border-radius: 10px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  word-break: break-all;
+}
 
 .settings-actions { justify-content: flex-end; gap: 12px; margin-top: 18px; display: flex; }
 .settings-actions .primary-button, .settings-actions .secondary-button { min-width: 190px; }
