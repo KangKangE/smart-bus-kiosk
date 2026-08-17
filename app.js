@@ -288,7 +288,7 @@
   }
 
   /* ---------- Gemini AI 연동 ---------- */
-  var GEMINI_MODEL = "gemini-2.5-flash-lite";
+  var GEMINI_MODEL = "gemini-3.5-flash-lite";
   var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent";
 
   function geminiCall(body) {
