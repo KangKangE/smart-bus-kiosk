@@ -45,7 +45,10 @@ export default async function handler(req, res) {
       "?SX=" + start.x + "&SY=" + start.y +
       "&EX=" + target.x + "&EY=" + target.y +
       "&apiKey=" + encodeURIComponent(odsayKey);
-    const data = await (await fetch(oUrl)).json();
+    // ODsay 웹 키는 등록된 도메인의 Referer를 검사하므로 서버 호출에도 붙여준다
+    const data = await (await fetch(oUrl, {
+      headers: { Referer: "https://smart-bus-kiosk.vercel.app/" }
+    })).json();
 
     if (data.error) {
       const e = Array.isArray(data.error) ? data.error[0] : data.error;
