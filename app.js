@@ -1075,6 +1075,16 @@
       var leg = firstLeg(path);
       var lineLabel = leg ? leg.line : (ko ? "도보" : "Walk");
       var ribbon = r.pref === "fast" ? (ko ? "가장 빠른 길" : "Fastest route") : (ko ? "가장 쉬운 길" : "Easiest route");
+      var legs = transitLegs(path);
+      var boardLine = "";
+      if (legs.length) {
+        boardLine =
+          '<div class="route-board-line">' +
+            '<span class="stop-tag">' + (ko ? "승차" : "ON") + "</span>" + legs[0].from +
+            ' <span class="stop-arrow">→</span> ' +
+            '<span class="stop-tag stop-tag-off">' + (ko ? "하차" : "OFF") + "</span>" + legs[legs.length - 1].to +
+          "</div>";
+      }
       return (
         '<article class="route-card ' + (i === 0 ? "recommended" : "route-other") + '">' +
           (i === 0 ? '<div class="recommend-ribbon">' + icon("check", 22) + ribbon + "</div>" : "") +
@@ -1089,6 +1099,7 @@
               fact(ko ? "요금" : "Fare", path.payment ? path.payment + (ko ? "원" : "₩") : "-") +
             "</div>" +
             '<div class="route-steps-line">' + stepsLine(path) + "</div>" +
+            boardLine +
           "</div>" +
           '<button class="detail-button" data-action="route-select" data-idx="' + i + '">' + t.detail + icon("arrow", 28) + "</button>" +
         "</article>"
@@ -1178,23 +1189,32 @@
         if (i > 0) stepsHtml += '<div class="journey-line"></div>';
         var iconName = st.type === "walk" ? "walk" : st.type === "subway" ? "route" : "bus";
         var cls = st.type === "walk" ? "walk-step" : (i === 0 ? "current-step" : "bus-step");
-        var label, strongText, pText;
+        var label, strongText, stopsRow = "", metaText = "";
         if (st.type === "walk") {
           label = ko ? "도보 이동" : "Walk";
           strongText = ko ? "걸어서 약 " + st.time + "분" : "Walk about " + st.time + " min";
           var walkFrom = i === 0 ? s.stationName : (c.steps[i - 1].to || "");
           var walkTo = i === c.steps.length - 1 ? r.destination : (c.steps[i + 1].from || "");
-          pText = walkFrom && walkTo
-            ? walkFrom + " → " + walkTo
-            : (ko ? "안내 표지를 따라 이동하세요" : "Follow the signs");
-        } else if (st.type === "bus") {
-          label = ko ? "버스 승차" : "Bus";
-          strongText = ko ? st.line + "번 버스 타기" : "Board bus " + st.line;
-          pText = st.from + " → " + st.to + " · " + (ko ? st.stations + "개 정류장 · 약 " + st.time + "분" : st.stations + " stops · " + st.time + " min");
+          if (walkFrom && walkTo) {
+            stopsRow = '<p class="stop-names">' + walkFrom + ' <span class="stop-arrow">→</span> ' + walkTo + "</p>";
+          } else {
+            metaText = ko ? "안내 표지를 따라 이동하세요" : "Follow the signs";
+          }
         } else {
-          label = ko ? "지하철 승차" : "Subway";
-          strongText = ko ? st.line + " 타기" : "Take the " + st.line;
-          pText = st.from + " → " + st.to + " · " + (ko ? st.stations + "개 역 · 약 " + st.time + "분" : st.stations + " stations · " + st.time + " min");
+          var isBus = st.type === "bus";
+          label = isBus ? (ko ? "버스 승차" : "Bus") : (ko ? "지하철 승차" : "Subway");
+          strongText = isBus
+            ? (ko ? st.line + "번 버스 타기" : "Board bus " + st.line)
+            : (ko ? st.line + " 타기" : "Take the " + st.line);
+          stopsRow =
+            '<p class="stop-names">' +
+              '<span class="stop-tag">' + (ko ? "승차" : "ON") + "</span>" + st.from +
+              ' <span class="stop-arrow">→</span> ' +
+              '<span class="stop-tag stop-tag-off">' + (ko ? "하차" : "OFF") + "</span>" + st.to +
+            "</p>";
+          metaText = isBus
+            ? (ko ? st.stations + "개 정류장 · 약 " + st.time + "분" : st.stations + " stops · " + st.time + " min")
+            : (ko ? st.stations + "개 역 · 약 " + st.time + "분" : st.stations + " stations · " + st.time + " min");
         }
         // 지도의 경로선과 같은 모양의 선 견본 (도보=회색 점선, 버스=파랑, 지하철=노선색)
         var lineSample = st.type === "walk"
@@ -1203,7 +1223,10 @@
         stepsHtml +=
           '<div class="journey-step">' +
             '<span class="step-icon ' + cls + '">' + icon(iconName, 28) + "</span>" +
-            "<div><span>" + label + " " + lineSample + "</span><strong>" + strongText + "</strong><p>" + pText + "</p></div>" +
+            "<div><span>" + label + " " + lineSample + "</span><strong>" + strongText + "</strong>" +
+              stopsRow +
+              (metaText ? '<p class="step-meta">' + metaText + "</p>" : "") +
+            "</div>" +
           "</div>";
       });
       var h1Text = leg
@@ -1542,7 +1565,13 @@
       case "cancel": cancelListening(); break;
       case "arrival": setScreen("arrival"); break;
       case "arrival-voice": openArrivalWithVoice(); break;
-      case "routes": setScreen("routes"); break;
+      case "routes":
+        // 길찾기를 새로 열 때는 이전 검색 결과를 비우고 처음부터
+        state.route = null;
+        state.routeError = "";
+        state.routeLoading = false;
+        setScreen("routes");
+        break;
       case "station": setScreen("station"); break;
       case "language": setScreen("language"); break;
       case "settings": setScreen("settings"); ensureCities(); break;

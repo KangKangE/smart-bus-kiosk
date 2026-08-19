@@ -1158,6 +1158,45 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   box-shadow: 0 3px 8px #15284a33;
 }
 
+/* 승차·하차 정류장 강조 표시 */
+.stop-tag {
+  color: #fff;
+  background: var(--blue);
+  border-radius: 7px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 800;
+  margin-right: 5px;
+  white-space: nowrap;
+}
+.stop-tag-off { background: #172033; }
+.stop-arrow { color: var(--muted); font-weight: 800; }
+
+.route-board-line {
+  margin-top: 9px;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.journey-step .stop-names {
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 800;
+  margin: 9px 0 0;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+.journey-step .step-meta {
+  color: var(--muted);
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
 /* 경로선 견본 (단계 목록·지도 범례 공용) */
 .line-sample {
   display: inline-block;
