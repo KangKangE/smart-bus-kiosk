@@ -10,7 +10,8 @@ export default async function handler(req, res) {
     res.status(405).json({ ok: false, error: "POST만 지원합니다." });
     return;
   }
-  const url = (process.env.SUPABASE_URL || "").trim().replace(/\/$/, "");
+  // Project URL 또는 REST URL(…/rest/v1) 어느 쪽을 넣어도 동작하도록 정규화
+  const url = (process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "");
   const key = (process.env.SUPABASE_SERVICE_KEY || "").trim();
   if (!url || !key) {
     res.status(200).json({ ok: false, error: "SUPABASE_URL / SUPABASE_SERVICE_KEY 환경변수가 없습니다." });
