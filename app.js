@@ -215,6 +215,9 @@
     nearby: null,            // 주변 시설 (Kakao 카테고리 검색 결과)
     geminiAvailable: null,   // Vercel에 GEMINI_API_KEY가 설정돼 있는지 (null=확인 중)
     rated: {},               // 만족도 평가 완료 여부 (중복 방지)
+    destConfirm: null,       // 목적지 확인 단계 {query, pref, candidates}
+    kpi: null,               // KPI 집계 결과
+    kpiError: "",
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -380,13 +383,19 @@
     return r.paths[r.selected || 0];
   }
 
-  function performRouteSearch(destText, pref) {
+  function performRouteSearch(destText, pref, coords) {
     var s = state.settings;
     state.routeLoading = true;
     state.routeError = "";
     state.route = null;
+    state.destConfirm = null;
     setScreen("routes");
     var qs = "dest=" + encodeURIComponent(destText) + "&pref=" + (pref || "simple");
+    if (coords && coords.x && coords.y) {
+      qs += "&destX=" + encodeURIComponent(coords.x) +
+        "&destY=" + encodeURIComponent(coords.y) +
+        "&destName=" + encodeURIComponent(coords.name || destText);
+    }
     if (s.lng && s.lat) {
       qs += "&sx=" + encodeURIComponent(s.lng) + "&sy=" + encodeURIComponent(s.lat) +
         "&sname=" + encodeURIComponent(s.stationName || "");
@@ -427,6 +436,70 @@
         state.routeError = "경로 서버에 연결하지 못했습니다. 배포된 사이트에서 시도해 주세요.";
         if (state.screen === "routes") render();
       });
+  }
+
+  /* ---------- 목적지 확인 단계 (음성 인식 오류 보완) ----------
+     음성으로 들은 목적지의 후보 장소들을 보여주고
+     "이 도착지가 맞나요?"를 확인받은 뒤 경로를 검색한다 */
+  function confirmDestination(query, pref) {
+    var s = state.settings;
+    state.routeLoading = false;
+    state.route = null;
+    state.routeError = "";
+    var url = "/api/places?q=" + encodeURIComponent(query);
+    if (s.lng && s.lat) url += "&x=" + encodeURIComponent(s.lng) + "&y=" + encodeURIComponent(s.lat);
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !d.places || !d.places.length) {
+          // 후보를 못 찾으면 이름 그대로 경로 검색 시도
+          performRouteSearch(query, pref);
+          return;
+        }
+        state.destConfirm = { query: query, pref: pref || "simple", candidates: d.places };
+        setScreen("routes", true);
+        var first = d.places[0].name;
+        logEvent("dest_confirm_shown", { query: query, first: first, count: d.places.length });
+        speak({
+          KO: "말씀하신 목적지가 " + first + " 맞나요? 맞으면 '네, 맞아요'를 누르거나 말씀해 주세요. 아니라면 아래 목록에서 골라주세요.",
+          EN: "Did you mean " + first + "? Tap yes or say yes, or choose from the list below.",
+          JA: "目的地は" + first + "でよろしいですか？下のリストからも選べます。",
+          ZH: "您的目的地是" + first + "吗？也可以从下面的列表中选择。"
+        }[state.language]);
+      })
+      .catch(function () { performRouteSearch(query, pref); });
+  }
+
+  function pickCandidate(idx, how) {
+    var dc = state.destConfirm;
+    if (!dc || !dc.candidates[idx]) return;
+    var c = dc.candidates[idx];
+    logEvent("dest_pick", { index: idx, name: c.name, query: dc.query, how: how || "tap" });
+    performRouteSearch(dc.query, dc.pref, c);
+  }
+
+  function handleConfirmVoice(text) {
+    var dc = state.destConfirm;
+    if (!dc) return;
+    var t = text.toLowerCase().replace(/\s/g, "");
+    var yesWords = ["네", "예", "맞아", "맞어", "맞습니다", "응", "그래", "yes", "yeah", "correct", "はい", "そうです", "对", "是的"];
+    for (var y = 0; y < yesWords.length; y++) {
+      if (t.indexOf(yesWords[y]) !== -1) { pickCandidate(0, "voice-yes"); return; }
+    }
+    // 후보 이름과 두 글자씩 겹치는 정도로 가장 비슷한 후보 선택
+    var best = -1, bestScore = 0;
+    dc.candidates.forEach(function (c, i) {
+      var name = c.name.toLowerCase().replace(/\s/g, "");
+      var hit = 0, total = Math.max(1, name.length - 1);
+      for (var j = 0; j < name.length - 1; j++) {
+        if (t.indexOf(name.substr(j, 2)) !== -1) hit++;
+      }
+      var score = hit / total;
+      if (score > bestScore) { bestScore = score; best = i; }
+    });
+    if (best >= 0 && bestScore >= 0.3) { pickCandidate(best, "voice-match"); return; }
+    // 후보와 전혀 다른 말이면 새 목적지로 다시 확인
+    confirmDestination(text, dc.pref);
   }
 
   function routeSummaryText(lang) {
@@ -690,6 +763,73 @@
       .catch(function () {});
   }
 
+  /* ---------- KPI 집계 (관리자용) ---------- */
+  function loadKpi() {
+    fetch("/api/kpi")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) state.kpi = d.kpi;
+        else state.kpiError = (d && d.error) || "KPI 집계에 실패했습니다.";
+        if (state.screen === "kpi") render();
+      })
+      .catch(function () {
+        state.kpiError = "KPI 서버에 연결하지 못했습니다. 배포된 사이트에서 확인해 주세요.";
+        if (state.screen === "kpi") render();
+      });
+  }
+
+  function renderKpi() {
+    var k = state.kpi;
+    if (state.kpiError) {
+      return '<div class="kpi-view content-view"><p class="route-error">' + state.kpiError + "</p></div>";
+    }
+    if (!k) {
+      return '<div class="kpi-view content-view"><div class="result-heading compact-heading"><div>' +
+        '<p class="eyebrow">KIOSK KPI</p><h1>집계 중…</h1></div></div></div>';
+    }
+    function tile(label, value, sub) {
+      return '<div class="kpi-tile"><span>' + label + "</span><strong>" + value + "</strong>" +
+        (sub ? "<small>" + sub + "</small>" : "") + "</div>";
+    }
+    function fmtPct(v) { return v == null ? "—" : v + "%"; }
+    function barList(title, entries) {
+      if (!entries || !entries.length) return "";
+      var max = entries[0][1] || 1;
+      return '<div class="kpi-bars"><h2>' + title + "</h2>" + entries.map(function (e) {
+        var w = Math.max(4, Math.round(e[1] / max * 100));
+        return '<div class="kpi-bar-row"><span class="kpi-bar-label">' + e[0] + "</span>" +
+          '<div class="kpi-bar-track"><div class="kpi-bar-fill" style="width:' + w + '%"></div></div>' +
+          "<b>" + e[1] + "</b></div>";
+      }).join("") + "</div>";
+    }
+    var period = k.period
+      ? new Date(k.period.from).toLocaleDateString("ko-KR") + " ~ " + new Date(k.period.to).toLocaleDateString("ko-KR") + " · 이벤트 " + k.totalEvents + "건"
+      : "아직 수집된 데이터가 없습니다.";
+    return (
+      '<div class="kpi-view content-view">' +
+        '<div class="result-heading compact-heading">' +
+          "<div>" +
+            '<p class="eyebrow">KIOSK KPI</p>' +
+            "<h1>사용 데이터 통계</h1>" +
+            '<p class="settings-intro">' + period + "</p>" +
+          "</div>" +
+          '<button class="listen-button" data-action="kpi-refresh">' + icon("refresh", 26) + "새로고침</button>" +
+        "</div>" +
+        '<div class="kpi-grid">' +
+          tile("사용 세션", k.sessions + "회", "기기 방문 기준") +
+          tile("음성 인식 성공률", fmtPct(k.voice.successRate), "시도 " + k.voice.attempts + "회 · 평균 신뢰도 " + (k.voice.avgConfidence == null ? "—" : k.voice.avgConfidence + "%")) +
+          tile("AI 의도 파악", k.ai.calls + "건", "평균 응답 " + (k.ai.avgMs == null ? "—" : k.ai.avgMs + "ms") + " · 대체동작 " + fmtPct(k.ai.fallbackRate)) +
+          tile("길찾기 성공률", fmtPct(k.route.successRate), "성공 " + k.route.searches + " · 실패 " + k.route.fails) +
+          tile("추천 경로 채택률", fmtPct(k.route.topPickRate), "경로 상세보기 " + k.route.selects + "회") +
+          tile("만족도 👍", fmtPct(k.rating.satisfaction), "도움됐어요 " + k.rating.up + " · 아쉬워요 " + k.rating.down) +
+        "</div>" +
+        barList("언어별 선택 횟수", k.langs) +
+        barList("인기 목적지 TOP 5", k.dests) +
+        barList("이탈(5분 무응답)이 발생한 화면", k.idles) +
+      "</div>"
+    );
+  }
+
   /* ---------- 정류장 검색 (관리자 설정) ---------- */
   var citiesLoading = false;
   function ensureCities() {
@@ -775,8 +915,7 @@
           ms: Date.now() - t0
         });
         if (result.screen === "routes" && result.destination) {
-          if (result.speech) speak(result.speech);
-          performRouteSearch(result.destination, result.routePref === "fast" ? "fast" : "simple");
+          confirmDestination(result.destination, result.routePref === "fast" ? "fast" : "simple");
           return;
         }
         var valid = ["arrival", "routes", "routeDetail", "station", "home"];
@@ -894,6 +1033,9 @@
       case "settings":
         speak("관리자 설정 화면입니다.");
         break;
+      case "kpi":
+        speak("사용 데이터 KPI 통계 화면입니다.");
+        break;
       case "saved":
         speak(lang === "KO" ? "설정이 저장되었습니다." : "Settings saved.");
         break;
@@ -906,7 +1048,7 @@
   }
 
   function goBack() {
-    setScreen(state.screen === "routeDetail" ? "routes" : "home");
+    setScreen(state.screen === "routeDetail" ? "routes" : state.screen === "kpi" ? "settings" : "home");
   }
 
   /* ---------- 음성 인식 ---------- */
@@ -950,7 +1092,10 @@
       });
       state.transcript = text;
       render();
-      if (state.geminiAvailable) {
+      if (state.destConfirm) {
+        // 목적지 확인 중: "네" 또는 후보 이름을 말하면 그 후보 선택
+        window.setTimeout(function () { handleConfirmVoice(text); }, 400);
+      } else if (state.geminiAvailable) {
         askGemini(text);
       } else {
         window.setTimeout(function () { interpretCommand(text); }, 800);
@@ -1182,9 +1327,39 @@
     }
     var destSearch =
       '<div class="dest-search">' +
-        '<input id="dest-input" placeholder="' + (ko ? "목적지를 입력하세요 (예: 수원역)" : "Enter a destination (e.g. Suwon Station)") + '">' +
+        '<button class="mic-inline" data-action="listen" aria-label="' + (ko ? "음성으로 목적지 말하기" : "Say your destination") + '">' + icon("mic", 28) + "</button>" +
+        '<input id="dest-input" placeholder="' + (ko ? "목적지를 말하거나 입력하세요 (예: 수원역)" : "Say or type a destination") + '">' +
         '<button class="primary-button" data-action="route-search">' + icon("route", 24) + (ko ? "경로 찾기" : "Find route") + "</button>" +
       "</div>";
+
+    /* 목적지 확인 단계: "이 도착지가 맞나요?" */
+    if (state.destConfirm) {
+      var dc = state.destConfirm;
+      var first = dc.candidates[0];
+      var others = dc.candidates.slice(1);
+      return (
+        '<div class="routes-view content-view">' +
+          '<div class="result-heading route-heading"><div>' +
+            '<p class="eyebrow">' + (ko ? "목적지 확인 · “" + dc.query + "”" : "Confirm · “" + dc.query + "”") + "</p>" +
+            "<h1>" + (ko ? "이 도착지가 맞나요?" : state.language === "JA" ? "この目的地でよろしいですか？" : state.language === "ZH" ? "是这个目的地吗？" : "Is this your destination?") + "</h1>" +
+          "</div></div>" +
+          '<div class="confirm-card">' +
+            "<div><strong>" + first.name + "</strong><p>" + (first.address || "") + "</p></div>" +
+            '<button class="primary-button" data-action="dest-pick" data-idx="0">' + icon("check", 26) + (ko ? "네, 맞아요" : "Yes") + "</button>" +
+          "</div>" +
+          (others.length
+            ? '<p class="recent-title">' + (ko ? "아니라면 여기서 누르거나 말씀해 주세요" : "Or choose / say one below") + "</p>" +
+              '<div class="candidate-list">' + others.map(function (p, oi) {
+                return '<button data-action="dest-pick" data-idx="' + (oi + 1) + '"><strong>' + p.name + "</strong><span>" + (p.address || "") + "</span></button>";
+              }).join("") + "</div>"
+            : "") +
+          '<div class="confirm-actions">' +
+            '<button class="secondary-button" data-action="listen">' + icon("mic", 24) + (ko ? "다시 말하기" : "Speak again") + "</button>" +
+            '<button class="secondary-button" data-action="dest-cancel">' + icon("x", 24) + (ko ? "처음부터" : "Cancel") + "</button>" +
+          "</div>" +
+        "</div>"
+      );
+    }
 
     if (state.routeLoading) {
       return (
@@ -1555,6 +1730,14 @@
               ? '<p class="test-error">' + esc(state.geminiErrorMsg) + "</p>"
               : "") +
           "</section>" +
+          '<section class="settings-section api-section">' +
+            '<div class="settings-section-title">' +
+              "<span>" + icon("clock", 29) + "</span>" +
+              "<div><h2>사용 데이터 KPI</h2><p>수집된 사용 데이터를 집계해 지표로 보여줍니다.</p></div>" +
+            "</div>" +
+            "<div></div>" +
+            '<button class="primary-button" data-action="kpi">' + icon("check", 24) + " KPI 통계 보기</button>" +
+          "</section>" +
         "</div>" +
         '<div class="settings-actions">' +
           '<button class="secondary-button" data-action="home">취소</button>' +
@@ -1600,6 +1783,7 @@
       case "station": body = renderStation(); break;
       case "language": body = renderLanguage(); break;
       case "settings": body = renderSettings(); break;
+      case "kpi": body = renderKpi(); break;
       case "saved": body = renderSaved(); break;
     }
     screenEl.innerHTML = backHtml + body;
@@ -1609,23 +1793,28 @@
     mountMaps();
   }
 
-  /* ---------- 자동 홈 복귀 (90초 무동작) ---------- */
+  /* ---------- 5분 무조작 시 첫 화면(언어 선택)으로 복귀 ---------- */
   function resetIdleTimer() {
     if (idleTimer) window.clearTimeout(idleTimer);
     idleTimer = null;
-    if (state.screen === "home" || state.screen === "settings") return;
+    // 언어 선택(이미 첫 화면)·관리자 화면·음성 인식 중에는 타이머 없음
+    if (["language", "settings", "kpi", "listening"].indexOf(state.screen) !== -1) return;
     idleTimer = window.setTimeout(function () {
       logEvent("idle_timeout", { screen: state.screen });
       if (window.speechSynthesis) window.speechSynthesis.cancel();
-      setScreen("home");
-    }, 90000);
+      state.route = null;
+      state.routeError = "";
+      state.destConfirm = null;
+      state.transcript = "";
+      state.rated = {};
+      setScreen("language");
+    }, 300000);
   }
 
-  window.addEventListener("pointerdown", function () {
-    if (idleTimer) resetIdleTimer();
-  });
-  window.addEventListener("keydown", function () {
-    if (idleTimer) resetIdleTimer();
+  ["pointerdown", "keydown", "wheel", "touchmove"].forEach(function (evt) {
+    window.addEventListener(evt, function () {
+      if (idleTimer) resetIdleTimer();
+    }, { passive: true });
   });
 
   /* ---------- 이벤트 ---------- */
@@ -1647,7 +1836,27 @@
         state.route = null;
         state.routeError = "";
         state.routeLoading = false;
+        state.destConfirm = null;
         setScreen("routes");
+        break;
+      case "dest-pick":
+        pickCandidate(parseInt(btn.getAttribute("data-idx"), 10) || 0, "tap");
+        break;
+      case "dest-cancel":
+        state.destConfirm = null;
+        setScreen("routes");
+        break;
+      case "kpi":
+        state.kpi = null;
+        state.kpiError = "";
+        setScreen("kpi");
+        loadKpi();
+        break;
+      case "kpi-refresh":
+        state.kpi = null;
+        state.kpiError = "";
+        render();
+        loadKpi();
         break;
       case "station": setScreen("station"); break;
       case "language": setScreen("language"); break;
@@ -1848,10 +2057,10 @@
 
   /* ---------- 시작 ---------- */
   var initialScreen = (window.location.hash || "").replace("#", "");
-  if (["arrival", "routes", "routeDetail", "station", "language", "settings"].indexOf(initialScreen) !== -1) {
+  if (["arrival", "routes", "routeDetail", "station", "language", "settings", "kpi"].indexOf(initialScreen) !== -1) {
     state.screen = initialScreen;
-  } else if (!storedLang) {
-    state.screen = "language";   // 처음 방문(언어 미선택)이면 언어 선택부터
+  } else {
+    state.screen = "language";   // 첫 화면은 항상 언어 선택
   }
   render();
   loadArrivals();

@@ -1158,6 +1158,77 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   box-shadow: 0 3px 8px #15284a33;
 }
 
+/* 길찾기 음성 버튼 */
+.dest-search .mic-inline {
+  width: 66px;
+  min-height: 66px;
+  flex: none;
+  border: 0;
+  border-radius: 18px;
+  background: var(--blue);
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.dest-search .mic-inline:hover { background: var(--blue-dark); }
+
+/* 목적지 확인 화면 */
+.confirm-card {
+  border: 3px solid var(--blue);
+  background: #fff;
+  border-radius: 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 26px;
+  margin-bottom: 18px;
+  box-shadow: 0 10px 28px #0b4dc91a;
+}
+.confirm-card strong { font-size: 30px; font-weight: 850; display: block; word-break: keep-all; }
+.confirm-card p { color: var(--muted); margin: 6px 0 0; font-size: 16px; font-weight: 600; }
+.confirm-card .primary-button { flex: none; }
+.candidate-list { display: grid; gap: 10px; }
+.candidate-list button {
+  border: 2px solid var(--line);
+  background: #fff;
+  border-radius: 18px;
+  min-height: 64px;
+  text-align: left;
+  padding: 10px 18px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+.candidate-list button:hover { border-color: var(--blue); background: var(--blue-soft); }
+.candidate-list strong { font-size: 20px; font-weight: 820; }
+.candidate-list span { color: var(--muted); font-size: 14px; font-weight: 600; }
+.confirm-actions { display: flex; gap: 12px; margin-top: 20px; justify-content: center; }
+
+/* KPI 대시보드 */
+.kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.kpi-tile { border: 1px solid var(--line); background: #fff; border-radius: 20px; padding: 18px 20px; }
+.kpi-tile span { color: var(--muted); font-size: 15px; font-weight: 750; display: block; }
+.kpi-tile strong {
+  color: var(--ink);
+  font-size: 34px;
+  font-weight: 880;
+  margin-top: 6px;
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-tile small { color: var(--muted); font-size: 13px; font-weight: 650; margin-top: 5px; display: block; }
+.kpi-bars { border: 1px solid var(--line); background: #fff; border-radius: 20px; padding: 18px 20px; margin-bottom: 14px; }
+.kpi-bars h2 { font-size: 17px; margin: 0 0 12px; color: #424d5d; }
+.kpi-bar-row { display: grid; grid-template-columns: 170px 1fr 48px; align-items: center; gap: 10px; min-height: 34px; }
+.kpi-bar-label { font-size: 15px; font-weight: 750; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kpi-bar-track { background: #eef2f7; border-radius: 6px; height: 14px; overflow: hidden; }
+.kpi-bar-fill { background: var(--blue); height: 100%; border-radius: 6px 4px 4px 6px; }
+.kpi-bar-row b { font-variant-numeric: tabular-nums; font-size: 15px; text-align: right; }
+
 /* 만족도 평가 */
 .rating-block {
   border: 1px solid var(--line);
@@ -1310,6 +1381,8 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   .api-section { grid-column: auto; grid-template-columns: 1fr; align-items: stretch; }
   .language-grid { grid-template-columns: repeat(2, 1fr); }
   .route-bottom { flex-direction: column; align-items: stretch; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  .confirm-card { flex-direction: column; align-items: stretch; text-align: center; }
 }
 
 @media (width <= 560px) {
@@ -1341,6 +1414,10 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   .field-row { grid-template-columns: 1fr; }
   .settings-actions { flex-direction: column-reverse; }
   .settings-actions button { width: 100%; }
+  .kpi-grid { grid-template-columns: 1fr; }
+  .kpi-bar-row { grid-template-columns: 105px 1fr 40px; }
+  .dest-search { flex-wrap: wrap; }
+  .dest-search input { min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

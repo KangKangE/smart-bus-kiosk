@@ -14,9 +14,9 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: false, error: "ODSAY_API_KEY 환경변수가 없습니다. lab.odsay.com에서 키를 발급받아 Vercel에 등록하세요." });
     return;
   }
-  const { dest, sx, sy, sname } = req.query;
-  if (!dest) {
-    res.status(400).json({ ok: false, error: "dest 파라미터가 필요합니다. 예: /api/route?dest=수원역&sx=126.97&sy=37.30" });
+  const { dest, sx, sy, sname, destX, destY, destName } = req.query;
+  if (!dest && !(destX && destY)) {
+    res.status(400).json({ ok: false, error: "dest 또는 destX+destY 파라미터가 필요합니다." });
     return;
   }
 
@@ -38,7 +38,10 @@ export default async function handler(req, res) {
     else if (sname) start = await geocode(sname);
     else throw new Error("출발지 정보(sx,sy 또는 sname)가 필요합니다.");
 
-    const target = await geocode(dest, start.x, start.y);
+    // 확인된 후보 좌표가 있으면 그대로 사용, 없으면 이름으로 좌표 검색
+    const target = (destX && destY)
+      ? { x: destX, y: destY, name: destName || dest || "목적지" }
+      : await geocode(dest, start.x, start.y);
 
     const oUrl =
       "https://api.odsay.com/v1/api/searchPubTransPathT" +
