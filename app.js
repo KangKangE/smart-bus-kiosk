@@ -214,6 +214,7 @@
     stationSearchMsg: "",
     nearby: null,            // 주변 시설 (Kakao 카테고리 검색 결과)
     geminiAvailable: null,   // Vercel에 GEMINI_API_KEY가 설정돼 있는지 (null=확인 중)
+    rated: {},               // 만족도 평가 완료 여부 (중복 방지)
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -246,6 +247,34 @@
     var list = getRecentDests().filter(function (n) { return n !== name; });
     list.unshift(name);
     try { window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 5))); } catch (e) {}
+  }
+
+  /* ---------- 사용 데이터 로깅 (KPI 측정용, Supabase 저장) ---------- */
+  var deviceId = "dev-unknown";
+  try {
+    deviceId = window.localStorage.getItem("smart-bus-device");
+    if (!deviceId) {
+      deviceId = "dev-" + Math.random().toString(36).slice(2, 10);
+      window.localStorage.setItem("smart-bus-device", deviceId);
+    }
+  } catch (e) {}
+  var sessionId = "s-" + Math.random().toString(36).slice(2, 10);
+
+  function logEvent(type, payload) {
+    try {
+      fetch("/api/log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          deviceId: deviceId,
+          sessionId: sessionId,
+          lang: state.language,
+          type: type,
+          payload: payload || {}
+        })
+      }).catch(function () {});
+    } catch (e) { /* 로깅 실패는 서비스 동작에 영향 없음 */ }
   }
 
   /* ---------- 유틸 ---------- */
@@ -370,6 +399,7 @@
         state.routeLoading = false;
         if (!data || !data.ok || !data.paths || !data.paths.length) {
           state.routeError = (data && data.error) || "경로를 찾지 못했습니다.";
+          logEvent("route_search_fail", { query: destText, error: state.routeError });
           if (state.screen === "routes") render();
           return;
         }
@@ -382,6 +412,13 @@
           selected: 0
         };
         addRecentDest(data.destination.name);
+        logEvent("route_search", {
+          query: destText,
+          found: data.destination.name,
+          pref: pref || "simple",
+          results: state.route.paths.length,
+          topTime: state.route.paths[0] ? state.route.paths[0].totalTime : null
+        });
         if (state.screen === "routes" || state.screen === "routeDetail") render();
         speakRouteSummary();
       })
@@ -715,6 +752,7 @@
 
   function askGemini(userText) {
     var token = ++aiRequestToken;
+    var t0 = Date.now();
     geminiCall({
       systemInstruction: { parts: [{ text: buildGeminiSystemPrompt() }] },
       contents: [{ role: "user", parts: [{ text: userText }] }],
@@ -729,6 +767,13 @@
       })
       .then(function (result) {
         if (token !== aiRequestToken || state.screen !== "listening") return;
+        logEvent("ai_intent", {
+          query: userText,
+          screen: result.screen || "",
+          destination: result.destination || "",
+          routePref: result.routePref || "",
+          ms: Date.now() - t0
+        });
         if (result.screen === "routes" && result.destination) {
           if (result.speech) speak(result.speech);
           performRouteSearch(result.destination, result.routePref === "fast" ? "fast" : "simple");
@@ -741,11 +786,13 @@
       .catch(function () {
         /* 키 오류·네트워크 오류 시 키워드 방식으로 대체 */
         if (token !== aiRequestToken || state.screen !== "listening") return;
+        logEvent("ai_fallback", { query: userText, ms: Date.now() - t0 });
         interpretCommand(userText);
       });
   }
 
   function setScreen(next, silent) {
+    if (state.screen !== next) logEvent("screen_view", { screen: next, from: state.screen });
     state.screen = next;
     render();
     if (!silent) announceScreen(next);
@@ -785,6 +832,23 @@
 
   function announceArrivals() {
     speak(arrivalsSpeechText());
+  }
+
+  /* ---------- 만족도 평가 (👍/👎) ---------- */
+  function ratingBlock(ctx) {
+    var ko = state.language === "KO";
+    if (state.rated[ctx]) {
+      return '<div class="rating-block rating-done">' +
+        (ko ? "소중한 의견 감사합니다!" : state.language === "JA" ? "ご意見ありがとうございます！" : state.language === "ZH" ? "感谢您的反馈！" : "Thank you for your feedback!") +
+        "</div>";
+    }
+    return (
+      '<div class="rating-block">' +
+        "<span>" + (ko ? "이 안내가 도움이 되었나요?" : state.language === "JA" ? "このご案内は役に立ちましたか？" : state.language === "ZH" ? "此信息对您有帮助吗？" : "Was this helpful?") + "</span>" +
+        '<button data-action="rate" data-value="up" data-ctx="' + ctx + '">👍 ' + (ko ? "도움됐어요" : "Yes") + "</button>" +
+        '<button data-action="rate" data-value="down" data-ctx="' + ctx + '">👎 ' + (ko ? "아쉬워요" : "No") + "</button>" +
+      "</div>"
+    );
   }
 
   function speakStationInfo() {
@@ -848,13 +912,16 @@
   /* ---------- 음성 인식 ---------- */
   function interpretCommand(text) {
     var t = text.toLowerCase();
+    var target;
     if (t.indexOf("도착") !== -1 || t.indexOf("arrival") !== -1 || t.indexOf("470") !== -1 || t.indexOf("버스 언제") !== -1) {
-      setScreen("arrival");
+      target = "arrival";
     } else if (t.indexOf("정류장") !== -1 || t.indexOf("where am i") !== -1 || t.indexOf("현재 위치") !== -1) {
-      setScreen("station");
+      target = "station";
     } else {
-      setScreen("routes");
+      target = "routes";
     }
+    logEvent("keyword_intent", { query: text, screen: target });
+    setScreen(target);
   }
 
   function startListening() {
@@ -876,6 +943,11 @@
     rec.interimResults = false;
     rec.onresult = function (e) {
       var text = e.results[0][0].transcript;
+      var confidence = e.results[0][0].confidence;
+      logEvent("voice_result", {
+        transcript: text,
+        confidence: typeof confidence === "number" ? Math.round(confidence * 100) / 100 : null
+      });
       state.transcript = text;
       render();
       if (state.geminiAvailable) {
@@ -884,7 +956,8 @@
         window.setTimeout(function () { interpretCommand(text); }, 800);
       }
     };
-    rec.onerror = function () {
+    rec.onerror = function (e) {
+      logEvent("voice_error", { error: (e && e.error) || "unknown" });
       state.voiceSupported = false;
       render();
     };
@@ -909,6 +982,7 @@
   function selectLanguage(id) {
     state.language = id;
     try { window.localStorage.setItem(LANG_KEY, id); } catch (e) {}
+    logEvent("language_select", { selected: id });
     setScreen("home", true);
     var msg = id === "KO" ? "한국어 안내를 시작합니다. 무엇을 도와드릴까요?"
       : id === "JA" ? "日本語の案内を開始します。何をお手伝いしましょうか？"
@@ -1053,6 +1127,7 @@
           '<button class="listen-button" data-action="speak-arrivals">' + icon("speaker", 30) + t.speak + "</button>" +
         "</div>" +
         '<div class="arrival-list">' + rows + "</div>" +
+        ratingBlock("arrival") +
         '<button class="home-button" data-action="home">' + icon("home", 27) + t.home + "</button>" +
       "</div>"
     );
@@ -1260,6 +1335,7 @@
                   : "Total walking time is " + c.walkTime + " min. Take your time.") + "</span>" +
             '<button class="primary-button" data-action="speak-route-live">' + icon("speaker", 29) + t.speak + "</button>" +
           "</div>" +
+          ratingBlock("route:" + r.destination) +
         "</div>"
       );
     }
@@ -1539,6 +1615,7 @@
     idleTimer = null;
     if (state.screen === "home" || state.screen === "settings") return;
     idleTimer = window.setTimeout(function () {
+      logEvent("idle_timeout", { screen: state.screen });
       if (window.speechSynthesis) window.speechSynthesis.cancel();
       setScreen("home");
     }, 90000);
@@ -1589,8 +1666,22 @@
       case "route-select":
         if (state.route) {
           state.route.selected = parseInt(btn.getAttribute("data-idx"), 10) || 0;
+          logEvent("route_select", { index: state.route.selected, dest: state.route.destination });
           setScreen("routeDetail");
         }
+        break;
+      case "rate":
+        (function () {
+          var value = btn.getAttribute("data-value");
+          var ctx = btn.getAttribute("data-ctx");
+          state.rated[ctx] = true;
+          logEvent("rating", { value: value, context: ctx });
+          render();
+          speak(state.language === "KO" ? "소중한 의견 감사합니다."
+            : state.language === "JA" ? "ご意見ありがとうございます。"
+            : state.language === "ZH" ? "感谢您的反馈。"
+            : "Thank you for your feedback.");
+        })();
         break;
       case "speak-route-live":
         speakRouteSummary();
@@ -1767,4 +1858,5 @@
   checkGemini();
   ensureStationCoords();
   if (state.screen === "settings") ensureCities();
+  logEvent("session_start", { screen: state.screen, station: state.settings.stationName });
 })();

@@ -61,6 +61,33 @@
 3. Settings → Environment Variables에 `BUS_API_KEY` 등록 후 Redeploy
 4. 배포된 HTTPS 주소에서는 마이크(음성 인식)도 정상 동작합니다.
 
+## 사용 데이터 수집 (KPI 측정, Supabase)
+
+1. Supabase SQL Editor에서 아래 실행:
+
+```sql
+create table if not exists events (
+  id bigint generated always as identity primary key,
+  created_at timestamptz not null default now(),
+  device_id text,
+  session_id text,
+  lang text,
+  event_type text not null,
+  payload jsonb not null default '{}'::jsonb
+);
+create index if not exists events_created_idx on events (created_at);
+create index if not exists events_type_idx on events (event_type);
+alter table events enable row level security;
+```
+
+2. Vercel 환경변수 등록 후 재배포:
+   - `SUPABASE_URL` = Supabase Project URL (https://xxxx.supabase.co)
+   - `SUPABASE_SERVICE_KEY` = service_role 키 (Settings → API)
+
+3. 수집 이벤트: session_start, screen_view, language_select, voice_result(인식 문장+신뢰도),
+   voice_error, ai_intent(의도·지연시간), ai_fallback, keyword_intent, route_search,
+   route_search_fail, route_select, idle_timeout, rating(👍/👎)
+
 ## 화면 바로가기 (개발용)
 
 `index.html#settings`, `#arrival`, `#routes`, `#routeDetail`, `#station`, `#language` 처럼

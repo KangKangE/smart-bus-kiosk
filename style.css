@@ -1158,6 +1158,34 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   box-shadow: 0 3px 8px #15284a33;
 }
 
+/* 만족도 평가 */
+.rating-block {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 20px;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 14px 20px;
+  font-size: 18px;
+  font-weight: 750;
+  display: flex;
+  flex-wrap: wrap;
+}
+.rating-block button {
+  border: 2px solid var(--line);
+  background: #f8fafc;
+  border-radius: 100px;
+  min-height: 54px;
+  padding: 0 22px;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rating-block button:hover { border-color: var(--blue); background: var(--blue-soft); }
+.rating-block.rating-done { color: var(--green); background: #e7f6ef; border-color: #bfe7d2; }
+
 /* 승차·하차 정류장 강조 표시 */
 .stop-tag {
   color: #fff;
