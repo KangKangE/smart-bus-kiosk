@@ -1086,6 +1086,20 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 .station-results button:hover { border-color: var(--blue); background: var(--blue-soft); }
 .station-msg { color: var(--muted); margin: 12px 0 0; font-weight: 700; font-size: 15px; }
 
+/* 카카오 실제 지도 */
+.station-map.real-map, .route-map.real-map { background: #e8ecf1; }
+.map-label {
+  background: #fff;
+  border: 2px solid var(--blue);
+  color: var(--blue);
+  font-weight: 800;
+  font-size: 14px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px #15284a33;
+}
+
 .settings-actions { justify-content: flex-end; gap: 12px; margin-top: 18px; display: flex; }
 .settings-actions .primary-button, .settings-actions .secondary-button { min-width: 190px; }
 

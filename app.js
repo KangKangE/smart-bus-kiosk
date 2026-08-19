@@ -211,6 +211,7 @@
     stationQuery: "",
     stationResults: null,
     stationSearchMsg: "",
+    nearby: null,            // 주변 시설 (Kakao 카테고리 검색 결과)
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -345,6 +346,8 @@
         var picked = pickPaths(data.paths, pref);
         state.route = {
           destination: data.destination.name,
+          start: data.start,
+          dest: data.destination,
           pref: pref || "simple",
           chosen: picked.chosen,
           alternate: picked.alternate
@@ -408,6 +411,93 @@
     } else {
       speak(base);
     }
+  }
+
+  /* ---------- 카카오 실제 지도 ---------- */
+  var kakaoMapsReady = false;
+
+  function ensureKakaoMaps(cb) {
+    if (kakaoMapsReady) { cb(); return; }
+    if (typeof kakao === "undefined" || !kakao.maps) return; // SDK 로드 실패(로컬 실행 등) → 그림 지도 유지
+    kakao.maps.load(function () {
+      kakaoMapsReady = true;
+      cb();
+    });
+  }
+
+  function mapLabel(text) {
+    return '<div class="map-label">' + text + "</div>";
+  }
+
+  function mountMaps() {
+    ensureKakaoMaps(function () {
+      var s = state.settings;
+
+      if (state.screen === "station") {
+        var el = document.querySelector(".station-map");
+        var lat = parseFloat(s.lat), lng = parseFloat(s.lng);
+        if (el && isFinite(lat) && isFinite(lng)) {
+          el.classList.add("real-map");
+          el.innerHTML = "";
+          var pos = new kakao.maps.LatLng(lat, lng);
+          var map = new kakao.maps.Map(el, { center: pos, level: 4 });
+          new kakao.maps.Marker({ position: pos, map: map });
+          new kakao.maps.CustomOverlay({
+            position: pos,
+            content: mapLabel(s.stationName + " " + (s.stationId || "")),
+            yAnchor: 2.4
+          }).setMap(map);
+        }
+      }
+
+      if (state.screen === "routeDetail" && state.route && state.route.dest && state.route.start) {
+        var el2 = document.querySelector(".route-map");
+        var r = state.route;
+        var sLat = parseFloat(r.start.y), sLng = parseFloat(r.start.x);
+        var eLat = parseFloat(r.dest.y), eLng = parseFloat(r.dest.x);
+        if (el2 && isFinite(sLat) && isFinite(sLng) && isFinite(eLat) && isFinite(eLng)) {
+          el2.classList.add("real-map");
+          el2.innerHTML = "";
+          var p1 = new kakao.maps.LatLng(sLat, sLng);
+          var p2 = new kakao.maps.LatLng(eLat, eLng);
+          var map2 = new kakao.maps.Map(el2, { center: p2, level: 7 });
+          new kakao.maps.Marker({ position: p1, map: map2 });
+          new kakao.maps.Marker({ position: p2, map: map2 });
+          new kakao.maps.Polyline({
+            path: [p1, p2],
+            strokeWeight: 5,
+            strokeColor: "#0b4dc9",
+            strokeOpacity: 0.7,
+            strokeStyle: "shortdash"
+          }).setMap(map2);
+          new kakao.maps.CustomOverlay({ position: p1, content: mapLabel(s.stationName), yAnchor: 2.4 }).setMap(map2);
+          new kakao.maps.CustomOverlay({ position: p2, content: mapLabel(r.destination), yAnchor: 2.4 }).setMap(map2);
+          var bounds = new kakao.maps.LatLngBounds();
+          bounds.extend(p1);
+          bounds.extend(p2);
+          map2.setBounds(bounds, 70);
+        }
+      }
+    });
+  }
+
+  /* ---------- 주변 시설 (정류장 정보 화면) ---------- */
+  var nearbyLoading = false;
+
+  function ensureNearby() {
+    var s = state.settings;
+    if (state.nearby || nearbyLoading || !s.lat || !s.lng) return;
+    nearbyLoading = true;
+    fetch("/api/nearby?x=" + encodeURIComponent(s.lng) + "&y=" + encodeURIComponent(s.lat))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        nearbyLoading = false;
+        if (d && d.ok && d.places && d.places.length) {
+          state.nearby = d.places;
+          if (state.screen === "station") render();
+        }
+      })
+      .catch(function () { nearbyLoading = false; });
   }
 
   /* ---------- 정류장 검색 (관리자 설정) ---------- */
@@ -957,9 +1047,14 @@
             "</div>" +
             '<div class="nearby-list">' +
               "<h2>" + t.nearby + "</h2>" +
-              nearby("광화문역 6번 출구", "1분") +
-              nearby("세종문화회관", "3분") +
-              nearby("서울역사박물관", "8분") +
+              (state.nearby
+                ? state.nearby.map(function (p) {
+                    var min = Math.max(1, Math.round(p.distance / 67)); // 도보 약 67m/분
+                    return nearby(p.name, min + (ko ? "분" : " min"));
+                  }).join("")
+                : nearby("광화문역 6번 출구", ko ? "1분" : "1 min") +
+                  nearby("세종문화회관", ko ? "3분" : "3 min") +
+                  nearby("서울역사박물관", ko ? "8분" : "8 min")) +
             "</div>" +
             '<button class="primary-button full-button" data-action="arrival-voice">' + icon("clock", 29) + (ko ? "이 정류장 도착 정보" : "View arrivals") + "</button>" +
           "</aside>" +
@@ -1137,6 +1232,8 @@
     screenEl.innerHTML = backHtml + body;
 
     resetIdleTimer();
+    if (state.screen === "station") ensureNearby();
+    mountMaps();
   }
 
   /* ---------- 자동 홈 복귀 (90초 무동작) ---------- */
@@ -1325,6 +1422,7 @@
       case "save":
         try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings)); } catch (err) {}
         state.liveBuses = null;   // 정류장이 바뀌었을 수 있으니 실시간 데이터 다시 불러오기
+        state.nearby = null;      // 주변 시설도 새 위치 기준으로 다시 검색
         loadArrivals();
         setScreen("saved");
         break;
