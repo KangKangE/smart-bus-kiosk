@@ -104,7 +104,7 @@ export default async function handler(req, res) {
       (a.minutes == null ? 999 : a.minutes) - (b.minutes == null ? 999 : b.minutes)
     );
     res.setHeader("Cache-Control", "s-maxage=15, stale-while-revalidate=30");
-    res.status(200).json({ ok: true, source, buses: buses.slice(0, 8) });
+    res.status(200).json({ ok: true, source, buses: buses.slice(0, 20) });
   } catch (e) {
     res.status(502).json({ ok: false, error: "버스 API 호출에 실패했습니다.", detail: String(e) });
   }

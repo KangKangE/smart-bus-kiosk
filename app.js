@@ -182,15 +182,16 @@
     stationName: "광화문역",
     stationId: "01-120",
     address: "서울특별시 종로구 세종대로 172",
-    prompt: "현재 키오스크는 광화문역 정류장에 설치되어 있습니다. 사용자의 언어와 이동 목적을 파악하고, 현재 위치를 기준으로 이용 가능한 버스 노선, 예상 도착 시간, 환승 횟수와 보행 구간을 짧고 명확하게 안내하세요. 노약자에게는 저상버스를 우선 안내하세요.",
+    prompt: "현재 키오스크는 [기본 위치] 정류장에 설치되어 있습니다. 사용자의 언어와 이동 목적을 파악하고, 현재 위치를 기준으로 이용 가능한 버스 노선, 예상 도착 시간, 환승 횟수와 보행 구간을 짧고 명확하게 안내하세요. 노약자에게는 저상버스를 우선 안내하세요. 또한, 우선순위를 판단하여 빠른 이동을 원하는 사용자에게는 가장 빠른 도착 경로를 우선적으로 안내하고, 노약자나 외국인에게는 최소한의 환승과 단순한 경로를 안내하세요.",
     endpoint: "https://api.example.kr/bus/arrivals",
     cityCode: "",            // 비우면 서울(arsId 방식), 채우면 TAGO 방식 (예: 수원 31010)
     lat: "37.5713",          // 정류장 위도 (길찾기 출발점, 정류장 검색으로 자동 입력)
-    lng: "126.9769",         // 정류장 경도
-    geminiKey: ""
+    lng: "126.9769"          // 정류장 경도
   };
 
   var STORAGE_KEY = "smart-bus-settings";
+  var LANG_KEY = "smart-bus-language";
+  var RECENT_KEY = "smart-bus-recent-dests";
 
   /* ---------- 상태 ---------- */
   var state = {
@@ -212,6 +213,7 @@
     stationResults: null,
     stationSearchMsg: "",
     nearby: null,            // 주변 시설 (Kakao 카테고리 검색 결과)
+    geminiAvailable: null,   // Vercel에 GEMINI_API_KEY가 설정돼 있는지 (null=확인 중)
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -223,6 +225,28 @@
     var stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored) state.settings = Object.assign({}, DEFAULT_SETTINGS, JSON.parse(stored));
   } catch (e) { /* 저장된 설정이 없거나 손상됨 */ }
+
+  // 예전 버전의 고정 프롬프트(특정 정류장 이름이 박힌 것)는 새 자동화 템플릿으로 교체
+  if (!state.settings.prompt ||
+      (state.settings.prompt.indexOf("[기본 위치]") === -1 && state.settings.prompt.indexOf("정류장에 설치되어") !== -1)) {
+    state.settings.prompt = DEFAULT_SETTINGS.prompt;
+  }
+
+  // 저장된 언어 불러오기 (없으면 첫 화면에서 언어 선택부터)
+  var storedLang = null;
+  try { storedLang = window.localStorage.getItem(LANG_KEY); } catch (e) {}
+  if (storedLang && STRINGS[storedLang]) state.language = storedLang;
+
+  function getRecentDests() {
+    try { return JSON.parse(window.localStorage.getItem(RECENT_KEY) || "[]"); } catch (e) { return []; }
+  }
+
+  function addRecentDest(name) {
+    if (!name) return;
+    var list = getRecentDests().filter(function (n) { return n !== name; });
+    list.unshift(name);
+    try { window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 5))); } catch (e) {}
+  }
 
   /* ---------- 유틸 ---------- */
   function localeFor(lang) {
@@ -282,7 +306,7 @@
             lowFloor: !!b.lowFloor
           };
         });
-        state.liveBuses = buses.slice(0, 6);
+        state.liveBuses = buses;   // 정류장의 모든 노선을 표시
         if (!liveTimer) liveTimer = window.setInterval(loadArrivals, 30000);
         if (state.screen === "home" || state.screen === "arrival") render();
       })
@@ -308,7 +332,7 @@
     return transitLegs(path)[0] || null;
   }
 
-  function pickPaths(paths, pref) {
+  function sortPaths(paths, pref) {
     var sorted = paths.slice();
     if (pref === "fast") {
       sorted.sort(function (a, b) { return a.totalTime - b.totalTime; });
@@ -318,7 +342,13 @@
         return (a.transfers - b.transfers) || (a.walkTime - b.walkTime) || (a.totalTime - b.totalTime);
       });
     }
-    return { chosen: sorted[0], alternate: sorted[1] || null };
+    return sorted.slice(0, 3);   // 경로는 최대 3개까지
+  }
+
+  function currentPath() {
+    var r = state.route;
+    if (!r || !r.paths || !r.paths.length) return null;
+    return r.paths[r.selected || 0];
   }
 
   function performRouteSearch(destText, pref) {
@@ -343,15 +373,15 @@
           if (state.screen === "routes") render();
           return;
         }
-        var picked = pickPaths(data.paths, pref);
         state.route = {
           destination: data.destination.name,
           start: data.start,
           dest: data.destination,
           pref: pref || "simple",
-          chosen: picked.chosen,
-          alternate: picked.alternate
+          paths: sortPaths(data.paths, pref),
+          selected: 0
         };
+        addRecentDest(data.destination.name);
         if (state.screen === "routes" || state.screen === "routeDetail") render();
         speakRouteSummary();
       })
@@ -365,7 +395,8 @@
   function routeSummaryText(lang) {
     var r = state.route;
     if (!r) return "";
-    var c = r.chosen;
+    var c = currentPath();
+    if (!c) return "";
     var leg = firstLeg(c);
     var lastStep = c.steps[c.steps.length - 1];
     var lastWalk = lastStep && lastStep.type === "walk" && lastStep.time > 0 ? lastStep : null;
@@ -394,8 +425,7 @@
   function speakRouteSummary() {
     var base = routeSummaryText(state.language === "KO" ? "KO" : "EN");
     if (!base) return;
-    var hasGemini = state.settings.geminiKey && state.settings.geminiKey.trim();
-    if (hasGemini && state.language !== "KO" && state.language !== "EN") {
+    if (state.geminiAvailable && state.language !== "KO" && state.language !== "EN") {
       // 일본어·중국어는 Gemini가 현재 언어로 자연스럽게 바꿔 말하도록
       var langName = { JA: "日本語", ZH: "中文" }[state.language] || "English";
       geminiCall({
@@ -440,7 +470,8 @@
           el.classList.add("real-map");
           el.innerHTML = "";
           var pos = new kakao.maps.LatLng(lat, lng);
-          var map = new kakao.maps.Map(el, { center: pos, level: 4 });
+          var map = new kakao.maps.Map(el, { center: pos, level: 3 });   // 50m 축척: 건물 단위로 보임
+          map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
           new kakao.maps.Marker({ position: pos, map: map });
           new kakao.maps.CustomOverlay({
             position: pos,
@@ -461,6 +492,7 @@
           var p1 = new kakao.maps.LatLng(sLat, sLng);
           var p2 = new kakao.maps.LatLng(eLat, eLng);
           var map2 = new kakao.maps.Map(el2, { center: p2, level: 7 });
+          map2.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
           new kakao.maps.Marker({ position: p1, map: map2 });
           new kakao.maps.Marker({ position: p2, map: map2 });
           new kakao.maps.Polyline({
@@ -500,6 +532,33 @@
       .catch(function () { nearbyLoading = false; });
   }
 
+  /* ---------- 정류장 좌표 보정 ----------
+     정류장 ID를 직접 입력한 경우 좌표가 기본값(광화문)으로 남아
+     지도·길찾기 출발점이 어긋나는 문제를 자동으로 고친다 */
+  function ensureStationCoords() {
+    var s = state.settings;
+    if (!s.cityCode || !s.stationId || !s.stationName) return;
+    var isDefault = s.lat === DEFAULT_SETTINGS.lat && s.lng === DEFAULT_SETTINGS.lng;
+    if (s.lat && s.lng && !isDefault) return;
+    var searchName = s.stationName.split(".")[0].split("(")[0].trim();
+    fetch("/api/find-station?cityCode=" + encodeURIComponent(s.cityCode) + "&name=" + encodeURIComponent(searchName))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !d.stations) return;
+        var match = d.stations.filter(function (st) {
+          return String(st.nodeId) === String(s.stationId);
+        })[0];
+        if (match && match.lat && match.lng) {
+          s.lat = String(match.lat);
+          s.lng = String(match.lng);
+          state.nearby = null;
+          try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+          if (state.screen === "station" || state.screen === "routeDetail") render();
+        }
+      })
+      .catch(function () {});
+  }
+
   /* ---------- 정류장 검색 (관리자 설정) ---------- */
   var citiesLoading = false;
   function ensureCities() {
@@ -517,19 +576,23 @@
       .catch(function () { citiesLoading = false; });
   }
 
-  /* ---------- Gemini AI 연동 ---------- */
-  var GEMINI_MODEL = "gemini-3.5-flash-lite";
-  var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent";
-
+  /* ---------- Gemini AI 연동 (키는 Vercel 환경변수 GEMINI_API_KEY, /api/gemini 프록시 사용) ---------- */
   function geminiCall(body) {
-    return fetch(GEMINI_URL, {
+    return fetch("/api/gemini", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": state.settings.geminiKey.trim()
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
+  }
+
+  function checkGemini() {
+    fetch("/api/gemini")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        state.geminiAvailable = !!(d && d.configured);
+        if (state.screen === "settings") render();
+      })
+      .catch(function () { state.geminiAvailable = false; });
   }
 
   function buildGeminiSystemPrompt() {
@@ -542,7 +605,8 @@
         (b.next != null ? ", 다음 버스 " + b.next + "분 후" : "") +
         ", " + (b.lowFloor ? "저상버스" : "일반버스");
     }).join("\n");
-    return s.prompt +
+    var basePrompt = (s.prompt || "").replace(/\[기본 위치\]/g, s.stationName);
+    return basePrompt +
       "\n\n[정류장 정보]\n이름: " + s.stationName + " (" + s.stationId + ")\n주소: " + s.address +
       "\n\n[버스 도착 정보]\n" + busInfo +
       "\n\n[길찾기 정보]\n강남역 방면: 470번 직행 (4분 후 도착, 약 32분 소요, 12개 정류장, 환승 없음), 대안 741번 (7분 후 도착, 약 37분 소요, 14개 정류장)." +
@@ -577,7 +641,7 @@
           return;
         }
         var valid = ["arrival", "routes", "routeDetail", "station", "home"];
-        setScreen(valid.indexOf(result.screen) !== -1 ? result.screen : "routes");
+        setScreen(valid.indexOf(result.screen) !== -1 ? result.screen : "routes", !!result.speech);
         if (result.speech) speak(result.speech);
       })
       .catch(function () {
@@ -587,9 +651,95 @@
       });
   }
 
-  function setScreen(next) {
+  function setScreen(next, silent) {
     state.screen = next;
     render();
+    if (!silent) announceScreen(next);
+  }
+
+  /* ---------- 화면 진입 시 음성 안내 (시각장애인·어르신·외국인 배려) ---------- */
+  function arrivalsSpeechText() {
+    var lang = state.language;
+    var list = getBuses().filter(function (b) { return b.minutes != null; }).slice(0, 3);
+    if (!list.length) {
+      return {
+        KO: "지금은 도착 예정인 버스 정보가 없습니다.",
+        EN: "There is no arrival information right now.",
+        JA: "現在、到着予定のバス情報はありません。",
+        ZH: "目前没有公交到站信息。"
+      }[lang];
+    }
+    if (lang === "KO") {
+      return list.map(function (b) {
+        return b.number + "번 버스는 " + (b.minutes <= 0 ? "곧" : b.minutes + "분 뒤");
+      }).join(", ") + " 도착합니다.";
+    }
+    if (lang === "JA") {
+      return list.map(function (b) {
+        return b.number + "番バスは" + (b.minutes <= 0 ? "まもなく" : b.minutes + "分後に");
+      }).join("、") + "到着します。";
+    }
+    if (lang === "ZH") {
+      return list.map(function (b) {
+        return b.number + "路公交车" + (b.minutes <= 0 ? "即将" : b.minutes + "分钟后");
+      }).join("，") + "到站。";
+    }
+    return list.map(function (b) {
+      return "Bus " + b.number + " arrives " + (b.minutes <= 0 ? "soon" : "in " + b.minutes + " minutes");
+    }).join(", ") + ".";
+  }
+
+  function announceArrivals() {
+    speak(arrivalsSpeechText());
+  }
+
+  function speakStationInfo() {
+    var s = state.settings;
+    var lang = state.language;
+    var text = {
+      KO: "이곳은 " + s.stationName + " 정류장입니다. 정류장 번호는 " + s.stationId + "입니다. 주변 시설은 화면의 지도에서 확인하실 수 있어요.",
+      EN: "This is " + s.stationName + " bus stop, stop number " + s.stationId + ". You can see nearby places on the map.",
+      JA: "ここは" + s.stationName + "バス停です。停留所番号は" + s.stationId + "です。周辺施設は画面の地図でご確認ください。",
+      ZH: "这里是" + s.stationName + "公交车站，站点编号" + s.stationId + "。周边设施请查看屏幕上的地图。"
+    }[lang];
+    speak(text);
+  }
+
+  function announceScreen(screen) {
+    var t = STRINGS[state.language];
+    var lang = state.language;
+    switch (screen) {
+      case "home":
+        speak(t.help + " " + t.intro);
+        break;
+      case "language":
+        speak(t.chooseLanguage);
+        break;
+      case "arrival":
+        announceArrivals();
+        break;
+      case "station":
+        speakStationInfo();
+        break;
+      case "routes":
+        if (state.routeLoading) {
+          speak({ KO: "경로를 찾고 있어요. 잠시만 기다려 주세요.", EN: "Finding your route. One moment please.", JA: "ルートを検索しています。少々お待ちください。", ZH: "正在查找路线，请稍候。" }[lang]);
+        } else if (state.route) {
+          speakRouteSummary();
+        } else {
+          speak({ KO: "어디로 가시나요? 목적지를 말하거나 입력해 주세요.", EN: "Where would you like to go? Say or type your destination.", JA: "どちらへ行かれますか？行き先を話すか入力してください。", ZH: "您要去哪里？请说出或输入目的地。" }[lang]);
+        }
+        break;
+      case "routeDetail":
+        if (state.route) speakRouteSummary();
+        break;
+      case "settings":
+        speak("관리자 설정 화면입니다.");
+        break;
+      case "saved":
+        speak(lang === "KO" ? "설정이 저장되었습니다." : "Settings saved.");
+        break;
+    }
   }
 
   function goHome() {
@@ -634,7 +784,7 @@
       var text = e.results[0][0].transcript;
       state.transcript = text;
       render();
-      if (state.settings.geminiKey && state.settings.geminiKey.trim()) {
+      if (state.geminiAvailable) {
         askGemini(text);
       } else {
         window.setTimeout(function () { interpretCommand(text); }, 800);
@@ -659,19 +809,17 @@
   }
 
   function openArrivalWithVoice() {
-    setScreen("arrival");
-    speak(state.language === "KO"
-      ? "가장 빠른 버스는 470번이며, 약 3분 뒤 도착합니다."
-      : "Bus 470 is arriving in about 3 minutes.");
+    setScreen("arrival");   // 화면 진입 안내가 실제 도착 정보를 음성으로 읽어줌
   }
 
   function selectLanguage(id) {
     state.language = id;
-    setScreen("home");
-    var msg = id === "KO" ? "한국어 안내를 시작합니다."
-      : id === "JA" ? "日本語の案内を開始します。"
-      : id === "ZH" ? "开始中文服务。"
-      : "English guidance is now active.";
+    try { window.localStorage.setItem(LANG_KEY, id); } catch (e) {}
+    setScreen("home", true);
+    var msg = id === "KO" ? "한국어 안내를 시작합니다. 무엇을 도와드릴까요?"
+      : id === "JA" ? "日本語の案内を開始します。何をお手伝いしましょうか？"
+      : id === "ZH" ? "开始中文服务。需要什么帮助？"
+      : "English guidance is now active. How can I help you?";
     window.setTimeout(function () { speak(msg); }, 80);
   }
 
@@ -712,9 +860,11 @@
   function renderHome() {
     var t = STRINGS[state.language];
     var ko = state.language === "KO";
+    var stationLabel = state.settings.stationName +
+      (ko ? " 버스정류장" : state.language === "JA" ? " バス停" : state.language === "ZH" ? " 公交车站" : " Bus Stop");
     return (
       '<div class="greeting">' +
-        '<p class="eyebrow">' + t.station + "</p>" +
+        '<p class="eyebrow">' + stationLabel + "</p>" +
         "<h1>" + t.help + "</h1>" +
         "<p>" + t.intro + "</p>" +
       "</div>" +
@@ -822,25 +972,31 @@
     function fact(label, value) {
       return "<div><span>" + label + "</span><strong>" + value + "</strong></div>";
     }
-    function routeCard(path, isMain) {
+    function stepsLine(path) {
+      return path.steps.map(function (st) {
+        return st.type === "walk" ? (ko ? "도보 " : "Walk ") + st.time + (ko ? "분" : "m") : st.line;
+      }).join(" → ");
+    }
+    function routeCard(path, i) {
       var leg = firstLeg(path);
       var lineLabel = leg ? leg.line : (ko ? "도보" : "Walk");
       var ribbon = r.pref === "fast" ? (ko ? "가장 빠른 길" : "Fastest route") : (ko ? "가장 쉬운 길" : "Easiest route");
       return (
-        '<article class="route-card ' + (isMain ? "recommended" : "alternate") + '">' +
-          (isMain ? '<div class="recommend-ribbon">' + icon("check", 22) + ribbon + "</div>" : "") +
+        '<article class="route-card ' + (i === 0 ? "recommended" : "route-other") + '">' +
+          (i === 0 ? '<div class="recommend-ribbon">' + icon("check", 22) + ribbon + "</div>" : "") +
           '<div class="route-number"><span>' +
-            (isMain
-              ? (path.transfers === 0 ? t.direct : (ko ? "환승 " + path.transfers + "회" : path.transfers + " transfer(s)"))
-              : (ko ? "다른 경로" : "Alternative")) +
+            (path.transfers === 0 ? t.direct : (ko ? "환승 " + path.transfers + "회" : path.transfers + " transfer(s)")) +
           "</span><strong>" + lineLabel + "</strong></div>" +
-          '<div class="route-facts">' +
-            fact(ko ? "총 시간" : "Total time", (ko ? "약 " : "") + path.totalTime + (ko ? "분" : " min")) +
-            fact(ko ? "환승" : "Transfers", path.transfers === 0 ? (ko ? "없음" : "None") : path.transfers + (ko ? "회" : "")) +
-            fact(ko ? "걷기" : "Walking", path.walkTime + (ko ? "분" : " min")) +
-            fact(ko ? "요금" : "Fare", path.payment ? path.payment + (ko ? "원" : " KRW") : "-") +
+          '<div class="route-main">' +
+            '<div class="route-facts">' +
+              fact(ko ? "총 시간" : "Total", (ko ? "약 " : "") + path.totalTime + (ko ? "분" : " min")) +
+              fact(ko ? "환승" : "Transfer", path.transfers === 0 ? (ko ? "없음" : "None") : path.transfers + (ko ? "회" : "")) +
+              fact(ko ? "걷기" : "Walk", path.walkTime + (ko ? "분" : " min")) +
+              fact(ko ? "요금" : "Fare", path.payment ? path.payment + (ko ? "원" : "₩") : "-") +
+            "</div>" +
+            '<div class="route-steps-line">' + stepsLine(path) + "</div>" +
           "</div>" +
-          (isMain ? '<button class="detail-button" data-action="detail">' + t.detail + icon("arrow", 28) + "</button>" : "") +
+          '<button class="detail-button" data-action="route-select" data-idx="' + i + '">' + t.detail + icon("arrow", 28) + "</button>" +
         "</article>"
       );
     }
@@ -876,8 +1032,7 @@
             '<button class="listen-button" data-action="speak-route-live">' + icon("speaker", 30) + t.speak + "</button>" +
           "</div>" +
           destSearch +
-          routeCard(r.chosen, true) +
-          (r.alternate ? routeCard(r.alternate, false) : "") +
+          r.paths.map(function (p, i) { return routeCard(p, i); }).join("") +
         "</div>"
       );
     }
@@ -893,11 +1048,24 @@
         "</div>" +
         destSearch +
         (state.routeError ? '<p class="route-error">' + state.routeError + "</p>" : "") +
-        '<div class="sample-questions">' +
-          '<button data-action="route-sample" data-dest="수원역">' + (ko ? "수원역" : "Suwon Station") + "</button>" +
-          '<button data-action="route-sample" data-dest="강남역">' + (ko ? "강남역" : "Gangnam Station") + "</button>" +
-          '<button data-action="route-sample" data-dest="서울역">' + (ko ? "서울역" : "Seoul Station") + "</button>" +
-        "</div>" +
+        (function () {
+          var recent = getRecentDests();
+          var chips = recent.length
+            ? recent.map(function (n) {
+                return '<button data-action="route-sample" data-dest="' + n + '">' + n + "</button>";
+              }).join("")
+            : '<button data-action="route-sample" data-dest="수원역">' + (ko ? "수원역" : "Suwon Station") + "</button>" +
+              '<button data-action="route-sample" data-dest="강남역">' + (ko ? "강남역" : "Gangnam Station") + "</button>" +
+              '<button data-action="route-sample" data-dest="서울역">' + (ko ? "서울역" : "Seoul Station") + "</button>";
+          return (
+            '<p class="recent-title">' +
+              (recent.length
+                ? (ko ? "최근 목적지" : state.language === "JA" ? "最近の目的地" : state.language === "ZH" ? "最近目的地" : "Recent destinations")
+                : (ko ? "이런 곳은 어떠세요?" : "Try one of these")) +
+            "</p>" +
+            '<div class="sample-questions">' + chips + "</div>"
+          );
+        })() +
       "</div>"
     );
   }
@@ -908,8 +1076,8 @@
     var s = state.settings;
     var r = state.route;
 
-    if (r) {
-      var c = r.chosen;
+    if (r && currentPath()) {
+      var c = currentPath();
       var leg = firstLeg(c);
       var stepsHtml = "";
       c.steps.forEach(function (st, i) {
@@ -1158,7 +1326,7 @@
           '<section class="settings-section">' +
             '<div class="settings-section-title">' +
               "<span>" + icon("mic", 29) + "</span>" +
-              "<div><h2>AI 기본 프롬프트</h2><p>모든 음성 질문에 공통으로 적용할 안내 원칙입니다.</p></div>" +
+              "<div><h2>AI 기본 프롬프트</h2><p>[기본 위치]는 위에서 설정한 정류장 이름으로 자동 치환됩니다.</p></div>" +
             "</div>" +
             '<textarea data-field="prompt">' + esc(s.prompt) + "</textarea>" +
             '<div class="prompt-tips"><span>✓ 짧은 문장</span><span>✓ 저상버스 우선</span><span>✓ 사용자 언어 감지</span></div>' +
@@ -1174,9 +1342,13 @@
           '<section class="settings-section api-section">' +
             '<div class="settings-section-title">' +
               "<span>" + icon("speaker", 29) + "</span>" +
-              "<div><h2>Gemini AI 음성 연동</h2><p>무료 Gemini API 키를 넣으면 음성 질문을 AI가 이해하고 답합니다.</p></div>" +
+              "<div><h2>Gemini AI 음성 연동</h2><p>키는 Vercel 환경변수 GEMINI_API_KEY로 관리됩니다. 여기서는 연결 상태만 확인합니다.</p></div>" +
             "</div>" +
-            '<label>Gemini API 키<input data-field="geminiKey" type="password" placeholder="AIza..." value="' + esc(s.geminiKey || "") + '"></label>' +
+            '<div class="gemini-status ' + (state.geminiAvailable === true ? "status-ok" : state.geminiAvailable === false ? "status-bad" : "") + '">' +
+              (state.geminiAvailable === true ? "환경변수 감지됨 — 연결 테스트로 최종 확인하세요"
+                : state.geminiAvailable === false ? "GEMINI_API_KEY 환경변수가 없습니다 (Vercel Settings → Environment Variables)"
+                : "환경변수 확인 중…") +
+            "</div>" +
             '<button class="test-button' + (state.geminiTest === "ok" ? " test-success" : state.geminiTest === "fail" ? " test-fail" : "") + '" data-action="gemini-test"' + (state.geminiTest === "testing" ? " disabled" : "") + ">" + geminiButtonHtml() + "</button>" +
             (state.geminiTest === "fail" && state.geminiErrorMsg
               ? '<p class="test-error">' + esc(state.geminiErrorMsg) + "</p>"
@@ -1283,6 +1455,12 @@
       case "route-sample":
         performRouteSearch(btn.getAttribute("data-dest"), "simple");
         break;
+      case "route-select":
+        if (state.route) {
+          state.route.selected = parseInt(btn.getAttribute("data-idx"), 10) || 0;
+          setScreen("routeDetail");
+        }
+        break;
       case "speak-route-live":
         speakRouteSummary();
         break;
@@ -1344,22 +1522,7 @@
         selectLanguage(btn.getAttribute("data-lang"));
         break;
       case "speak-arrivals":
-        (function () {
-          var list = getBuses().filter(function (b) { return b.minutes != null; }).slice(0, 3);
-          if (!list.length) {
-            speak(ko ? "지금은 도착 예정인 버스 정보가 없습니다." : "There is no arrival information right now.");
-            return;
-          }
-          if (ko) {
-            speak(list.map(function (b) {
-              return b.number + "번 버스는 " + (b.minutes <= 0 ? "곧" : b.minutes + "분 뒤");
-            }).join(", ") + " 도착합니다.");
-          } else {
-            speak(list.map(function (b) {
-              return "Bus " + b.number + " arrives " + (b.minutes <= 0 ? "soon" : "in " + b.minutes + " minutes");
-            }).join(", ") + ".");
-          }
-        })();
+        announceArrivals();
         break;
       case "speak-routes":
         speak(ko
@@ -1372,9 +1535,7 @@
           : "At this stop, board bus 470 arriving in 4 minutes. Ride for 12 stops and get off at Gangnam Station.");
         break;
       case "speak-station":
-        speak(ko
-          ? "이곳은 " + s.stationName + " 정류장입니다. 정류장 번호는 " + s.stationId + "입니다. 근처에 광화문역 6번 출구와 세종문화회관이 있습니다."
-          : "This is " + s.stationName + " bus stop, stop number " + s.stationId + ". Gwanghwamun Station exit 6 and Sejong Center are nearby.");
+        speakStationInfo();
         break;
       case "test":
         state.testState = "testing";
@@ -1385,14 +1546,9 @@
         }, 850);
         break;
       case "gemini-test":
-        if (!state.settings.geminiKey || !state.settings.geminiKey.trim()) {
-          state.geminiTest = "fail";
-          state.geminiErrorMsg = "키를 입력해 주세요.";
-          render();
-          break;
-        }
         state.geminiTest = "testing";
         updateGeminiButton();
+        checkGemini();
         geminiCall({
           contents: [{ role: "user", parts: [{ text: "안녕" }] }],
           generationConfig: { maxOutputTokens: 5 }
@@ -1438,13 +1594,6 @@
       state.testState = "idle";
       updateTestButton();
     }
-    if (field === "geminiKey" && state.geminiTest !== "idle") {
-      state.geminiTest = "idle";
-      state.geminiErrorMsg = "";
-      updateGeminiButton();
-      var msgEl = document.querySelector(".test-error");
-      if (msgEl) msgEl.remove();
-    }
   });
 
   function updateTestButton() {
@@ -1479,8 +1628,12 @@
   var initialScreen = (window.location.hash || "").replace("#", "");
   if (["arrival", "routes", "routeDetail", "station", "language", "settings"].indexOf(initialScreen) !== -1) {
     state.screen = initialScreen;
+  } else if (!storedLang) {
+    state.screen = "language";   // 처음 방문(언어 미선택)이면 언어 선택부터
   }
   render();
   loadArrivals();
+  checkGemini();
+  ensureStationCoords();
   if (state.screen === "settings") ensureCities();
 })();

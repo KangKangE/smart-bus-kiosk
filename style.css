@@ -1086,6 +1086,55 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 .station-results button:hover { border-color: var(--blue); background: var(--blue-soft); }
 .station-msg { color: var(--muted); margin: 12px 0 0; font-weight: 700; font-size: 15px; }
 
+/* 경로 카드 (지도앱 스타일, 최대 3개) */
+.route-main { min-width: 0; }
+.route-steps-line {
+  color: var(--muted);
+  font-weight: 750;
+  font-size: 16px;
+  margin-top: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.route-card .route-number strong {
+  font-size: 32px;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: keep-all;
+}
+.route-card .route-facts span { font-size: 13px; }
+.route-card .route-facts strong { font-size: 18px; }
+.route-card .route-facts div { min-height: 72px; padding: 12px; }
+.route-heading h1 {
+  font-size: clamp(32px, 3vw, 46px);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.route-card.route-other { opacity: .92; }
+.recent-title { color: var(--muted); text-align: center; margin: 22px 0 10px; font-size: 17px; font-weight: 750; }
+
+/* Gemini 연결 상태 */
+.gemini-status {
+  border: 2px solid var(--line);
+  background: #fbfcfd;
+  border-radius: 14px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 15px;
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--muted);
+}
+.gemini-status.status-ok { color: #0c7049; background: #e7f6ef; border-color: #159765; }
+.gemini-status.status-bad { color: #c52d3b; background: #fdecee; border-color: #c52d3b; }
+
 /* 카카오 실제 지도 */
 .station-map.real-map, .route-map.real-map { background: #e8ecf1; }
 .map-label {
