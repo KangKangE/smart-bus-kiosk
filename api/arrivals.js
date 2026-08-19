@@ -1,41 +1,103 @@
-// Vercel 서버리스 함수 — 서울시 버스 도착정보 프록시
-// 공공데이터포털 API는 브라우저에서 직접 호출하면 CORS로 차단되고 키가 노출되므로
-// 이 함수가 중간에서 대신 호출해 줍니다.
+// Vercel 서버리스 함수 — 버스 도착정보 프록시
+// 두 가지 데이터 소스를 지원하고, 응답을 공통 형식으로 정리해서 돌려줍니다.
+//   1) 서울시:  /api/arrivals?arsId=01120
+//   2) TAGO(전국·경기도 포함): /api/arrivals?cityCode=31010&nodeId=GGB233000723
 //
-// 사용 전 준비:
-//   Vercel 대시보드 → Settings → Environment Variables 에
-//   BUS_API_KEY = 공공데이터포털 "일반 인증키(Decoding)" 값 등록
-//
-// 호출 예: /api/arrivals?arsId=01120  (arsId = 정류장 ARS 번호, 하이픈 제외)
+// 공통 응답: { ok: true, source: "seoul"|"tago", buses: [{ number, direction, minutes, next, lowFloor }] }
+// 환경변수: BUS_API_KEY = 공공데이터포털 일반 인증키 (Encoding/Decoding 모두 가능)
 export default async function handler(req, res) {
-  const arsId = String(req.query.arsId || "").replace(/[^0-9]/g, "");
-  if (!arsId) {
-    res.status(400).json({ error: "arsId 쿼리 파라미터가 필요합니다. 예: /api/arrivals?arsId=01120" });
+  const key = (process.env.BUS_API_KEY || "").trim();
+  if (!key) {
+    res.status(500).json({ ok: false, error: "BUS_API_KEY 환경변수가 설정되지 않았습니다." });
     return;
   }
-  if (!process.env.BUS_API_KEY) {
-    res.status(500).json({ error: "BUS_API_KEY 환경변수가 설정되지 않았습니다." });
-    return;
-  }
-
-  // 키가 이미 URL 인코딩된 형태(Encoding 키, % 포함)면 그대로 쓰고,
-  // Decoding 키면 인코딩해서 사용 — 어느 쪽을 넣어도 동작하게 처리
-  const rawKey = process.env.BUS_API_KEY.trim();
-  const serviceKey = rawKey.includes("%") ? rawKey : encodeURIComponent(rawKey);
-
-  const url =
-    "http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid" +
-    "?serviceKey=" + serviceKey +
-    "&arsId=" + arsId +
-    "&resultType=json";
+  const serviceKey = key.includes("%") ? key : encodeURIComponent(key);
+  const { arsId, cityCode, nodeId } = req.query;
 
   try {
-    const upstream = await fetch(url);
-    const data = await upstream.json();
-    // 15초 캐시 — 같은 정류장을 여러 사람이 봐도 API 호출 횟수를 아낌
+    let buses;
+    let source;
+
+    if (cityCode && nodeId) {
+      /* ---------- TAGO (국토교통부) — 경기도 등 전국 ---------- */
+      source = "tago";
+      const url =
+        "http://apis.data.go.kr/1613000/ArvlInfoInqireService/getSttnAcctoArvlPrearngeInfoList" +
+        "?serviceKey=" + serviceKey +
+        "&cityCode=" + encodeURIComponent(cityCode) +
+        "&nodeId=" + encodeURIComponent(nodeId) +
+        "&numOfRows=50&pageNo=1&_type=json";
+      const data = await (await fetch(url)).json();
+      const header = data && data.response && data.response.header;
+      if (!header || String(header.resultCode) !== "00") {
+        res.status(200).json({
+          ok: false, source,
+          error: header ? header.resultCode + ": " + header.resultMsg : "TAGO 응답 형식 오류",
+          raw: data
+        });
+        return;
+      }
+      let items = (data.response.body && data.response.body.items && data.response.body.items.item) || [];
+      if (!Array.isArray(items)) items = [items]; // 결과가 1건이면 객체로 옴
+      const byRoute = {};
+      for (const it of items) {
+        const no = String(it.routeno);
+        const min = Math.max(0, Math.round(Number(it.arrtime) / 60));
+        if (!byRoute[no]) {
+          byRoute[no] = {
+            number: no,
+            direction: it.routetp || "",           // TAGO는 방면 정보가 없어 노선 유형을 표시
+            minutes: min,
+            next: null,
+            lowFloor: it.vehicletp === "저상버스"
+          };
+        } else if (byRoute[no].next == null) {
+          byRoute[no].next = min;
+        }
+      }
+      buses = Object.values(byRoute);
+    } else {
+      /* ---------- 서울시 ---------- */
+      const ars = String(arsId || "").replace(/[^0-9]/g, "");
+      if (!ars) {
+        res.status(400).json({ ok: false, error: "arsId 또는 cityCode+nodeId 파라미터가 필요합니다." });
+        return;
+      }
+      source = "seoul";
+      const url =
+        "http://ws.bus.go.kr/api/rest/stationinfo/getStationByUid" +
+        "?serviceKey=" + serviceKey + "&arsId=" + ars + "&resultType=json";
+      const data = await (await fetch(url)).json();
+      const h = data && data.msgHeader;
+      if (!h || String(h.headerCd) !== "0") {
+        res.status(200).json({ ok: false, source, error: h ? h.headerMsg : "서울 API 응답 형식 오류" });
+        return;
+      }
+      let items = (data.msgBody && data.msgBody.itemList) || [];
+      if (!Array.isArray(items)) items = [items];
+      const parseMsg = (m) => {
+        if (!m) return null;
+        if (m.includes("곧 도착")) return 0;
+        const x = m.match(/(\d+)분/);
+        return x ? parseInt(x[1], 10) : null;
+      };
+      buses = items
+        .filter((it) => it.arrmsg1 && !it.arrmsg1.includes("운행종료"))
+        .map((it) => ({
+          number: it.rtNm,
+          direction: it.adirection ? it.adirection + " 방면" : "",
+          minutes: parseMsg(it.arrmsg1),
+          next: parseMsg(it.arrmsg2),
+          lowFloor: it.busType1 === "1"
+        }));
+    }
+
+    buses.sort((a, b) =>
+      (a.minutes == null ? 999 : a.minutes) - (b.minutes == null ? 999 : b.minutes)
+    );
     res.setHeader("Cache-Control", "s-maxage=15, stale-while-revalidate=30");
-    res.status(200).json(data);
+    res.status(200).json({ ok: true, source, buses: buses.slice(0, 8) });
   } catch (e) {
-    res.status(502).json({ error: "버스 API 호출에 실패했습니다.", detail: String(e) });
+    res.status(502).json({ ok: false, error: "버스 API 호출에 실패했습니다.", detail: String(e) });
   }
 }

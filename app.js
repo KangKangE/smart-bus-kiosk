@@ -184,6 +184,7 @@
     address: "서울특별시 종로구 세종대로 172",
     prompt: "현재 키오스크는 광화문역 정류장에 설치되어 있습니다. 사용자의 언어와 이동 목적을 파악하고, 현재 위치를 기준으로 이용 가능한 버스 노선, 예상 도착 시간, 환승 횟수와 보행 구간을 짧고 명확하게 안내하세요. 노약자에게는 저상버스를 우선 안내하세요.",
     endpoint: "https://api.example.kr/bus/arrivals",
+    cityCode: "",            // 비우면 서울(arsId 방식), 채우면 TAGO 방식 (예: 수원 31010)
     geminiKey: ""
   };
 
@@ -242,33 +243,33 @@
   }
 
   function loadArrivals() {
-    var arsId = String(state.settings.stationId || "").replace(/[^0-9]/g, "");
-    if (!arsId) return;
-    fetch("/api/arrivals?arsId=" + arsId)
+    var s = state.settings;
+    var url;
+    if (s.cityCode && s.cityCode.trim()) {
+      // TAGO 방식 (경기도 등): 정류장 ID 칸에 nodeId, 도시코드 칸에 cityCode
+      url = "/api/arrivals?cityCode=" + encodeURIComponent(s.cityCode.trim()) +
+        "&nodeId=" + encodeURIComponent(String(s.stationId || "").trim());
+    } else {
+      var arsId = String(s.stationId || "").replace(/[^0-9]/g, "");
+      if (!arsId) return;
+      url = "/api/arrivals?arsId=" + arsId;
+    }
+    fetch(url)
       .then(function (res) {
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
       .then(function (data) {
-        var items = data && data.msgBody && data.msgBody.itemList;
-        if (!items || !items.length) throw new Error("no data");
-        var buses = items
-          .map(function (it) {
-            return {
-              number: it.rtNm,
-              direction: it.adirection ? it.adirection + " 방면" : "",
-              minutes: parseArrMsg(it.arrmsg1),
-              next: parseArrMsg(it.arrmsg2),
-              msg1: it.arrmsg1 || "",
-              lowFloor: it.busType1 === "1"
-            };
-          })
-          .filter(function (b) {
-            return b.number && b.msg1 && b.msg1.indexOf("운행종료") === -1;
-          });
-        if (!buses.length) throw new Error("no running bus");
-        buses.sort(function (a, b) {
-          return (a.minutes == null ? 999 : a.minutes) - (b.minutes == null ? 999 : b.minutes);
+        if (!data || !data.ok || !data.buses || !data.buses.length) throw new Error("no data");
+        var buses = data.buses.map(function (b) {
+          return {
+            number: b.number,
+            direction: b.direction || "",
+            minutes: b.minutes,
+            next: b.next,
+            msg1: "",
+            lowFloor: !!b.lowFloor
+          };
         });
         state.liveBuses = buses.slice(0, 6);
         if (!liveTimer) liveTimer = window.setInterval(loadArrivals, 30000);
@@ -769,7 +770,10 @@
               '<label>정류장 이름<input data-field="stationName" value="' + esc(s.stationName) + '"></label>' +
               '<label>정류장 ID<input data-field="stationId" value="' + esc(s.stationId) + '"></label>' +
             "</div>" +
-            '<label>정류장 주소<input data-field="address" value="' + esc(s.address) + '"></label>' +
+            '<div class="field-row">' +
+              '<label>정류장 주소<input data-field="address" value="' + esc(s.address) + '"></label>' +
+              '<label>도시코드 (서울은 비움 · 수원 31010)<input data-field="cityCode" placeholder="예: 31010" value="' + esc(s.cityCode || "") + '"></label>' +
+            "</div>" +
           "</section>" +
           '<section class="settings-section">' +
             '<div class="settings-section-title">' +
