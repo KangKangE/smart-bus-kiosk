@@ -47,15 +47,23 @@ export default async function handler(req, res) {
           byRoute[no] = {
             number: no,
             direction: it.routetp || "",           // TAGO는 방면 정보가 없어 노선 유형을 표시
-            minutes: min,
-            next: null,
+            times: [min],
             lowFloor: it.vehicletp === "저상버스"
           };
-        } else if (byRoute[no].next == null) {
-          byRoute[no].next = min;
+        } else {
+          byRoute[no].times.push(min);
         }
       }
-      buses = Object.values(byRoute);
+      buses = Object.values(byRoute).map((r) => {
+        r.times.sort((a, b) => a - b);  // 같은 노선의 도착 시간이 순서 없이 와서 정렬 필요
+        return {
+          number: r.number,
+          direction: r.direction,
+          minutes: r.times[0],
+          next: r.times.length > 1 ? r.times[1] : null,
+          lowFloor: r.lowFloor
+        };
+      });
     } else {
       /* ---------- 서울시 ---------- */
       const ars = String(arsId || "").replace(/[^0-9]/g, "");
