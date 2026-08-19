@@ -37,7 +37,12 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify(row)
     });
-    res.status(200).json({ ok: r.ok, status: r.status });
+    if (r.ok) {
+      res.status(200).json({ ok: true });
+    } else {
+      const detail = (await r.text()).slice(0, 300);
+      res.status(200).json({ ok: false, status: r.status, detail, target: url + "/rest/v1/events" });
+    }
   } catch (e) {
     res.status(200).json({ ok: false, error: String(e) });
   }
