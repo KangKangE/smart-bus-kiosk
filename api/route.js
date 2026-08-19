@@ -63,6 +63,7 @@ export default async function handler(req, res) {
       return {
         totalTime: info.totalTime,                 // 총 소요 시간(분)
         payment: info.payment,                     // 요금(원)
+        mapObj: info.mapObj || "",                 // 실제 경로 선형 조회용 (loadLane)
         transfers: Math.max(0, (info.busTransitCount || 0) + (info.subwayTransitCount || 0) - 1),
         walkTime: subs.filter((s) => s.trafficType === 3).reduce((a, s) => a + (s.sectionTime || 0), 0),
         steps: subs

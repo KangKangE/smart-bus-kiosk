@@ -446,6 +446,23 @@
   /* ---------- 카카오 실제 지도 ---------- */
   var kakaoMapsReady = false;
 
+  function subwayColor(name) {
+    var n = name || "";
+    if (n.indexOf("1호선") !== -1) return "#0052A4";
+    if (n.indexOf("2호선") !== -1) return "#00A84D";
+    if (n.indexOf("3호선") !== -1) return "#EF7C1C";
+    if (n.indexOf("4호선") !== -1) return "#00A5DE";
+    if (n.indexOf("5호선") !== -1) return "#996CAC";
+    if (n.indexOf("6호선") !== -1) return "#CD7C2F";
+    if (n.indexOf("7호선") !== -1) return "#747F00";
+    if (n.indexOf("8호선") !== -1) return "#E6186C";
+    if (n.indexOf("9호선") !== -1) return "#BDB092";
+    if (n.indexOf("신분당") !== -1) return "#D4003B";
+    if (n.indexOf("분당") !== -1) return "#F5A200";
+    if (n.indexOf("경의") !== -1) return "#77C4A3";
+    return "#7c39b0";
+  }
+
   function ensureKakaoMaps(cb) {
     if (kakaoMapsReady) { cb(); return; }
     if (typeof kakao === "undefined" || !kakao.maps) return; // SDK 로드 실패(로컬 실행 등) → 그림 지도 유지
@@ -484,9 +501,10 @@
       if (state.screen === "routeDetail" && state.route && state.route.dest && state.route.start) {
         var el2 = document.querySelector(".route-map");
         var r = state.route;
+        var path = currentPath();
         var sLat = parseFloat(r.start.y), sLng = parseFloat(r.start.x);
         var eLat = parseFloat(r.dest.y), eLng = parseFloat(r.dest.x);
-        if (el2 && isFinite(sLat) && isFinite(sLng) && isFinite(eLat) && isFinite(eLng)) {
+        if (el2 && path && isFinite(sLat) && isFinite(sLng) && isFinite(eLat) && isFinite(eLng)) {
           el2.classList.add("real-map");
           el2.innerHTML = "";
           var p1 = new kakao.maps.LatLng(sLat, sLng);
@@ -495,19 +513,73 @@
           map2.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
           new kakao.maps.Marker({ position: p1, map: map2 });
           new kakao.maps.Marker({ position: p2, map: map2 });
-          new kakao.maps.Polyline({
-            path: [p1, p2],
-            strokeWeight: 5,
-            strokeColor: "#0b4dc9",
-            strokeOpacity: 0.7,
-            strokeStyle: "shortdash"
-          }).setMap(map2);
           new kakao.maps.CustomOverlay({ position: p1, content: mapLabel(s.stationName), yAnchor: 2.4 }).setMap(map2);
           new kakao.maps.CustomOverlay({ position: p2, content: mapLabel(r.destination), yAnchor: 2.4 }).setMap(map2);
           var bounds = new kakao.maps.LatLngBounds();
           bounds.extend(p1);
           bounds.extend(p2);
-          map2.setBounds(bounds, 70);
+
+          var walkLine = function (from, to) {
+            new kakao.maps.Polyline({
+              path: [from, to],
+              strokeWeight: 4,
+              strokeColor: "#7a8698",
+              strokeOpacity: 0.85,
+              strokeStyle: "shortdot"     // 도보 구간은 회색 점선
+            }).setMap(map2);
+          };
+
+          var drawStraight = function () {
+            walkLine(p1, p2);
+            map2.setBounds(bounds, 60);
+          };
+
+          var drawLanes = function (lanes) {
+            var legs = transitLegs(path);
+            var prev = p1;
+            lanes.forEach(function (lane, i) {
+              var pts = lane.points.map(function (g) { return new kakao.maps.LatLng(g.y, g.x); });
+              if (!pts.length) return;
+              walkLine(prev, pts[0]);   // 이전 지점 → 승차 지점 도보
+              var leg = legs[i];
+              var color = leg && leg.type === "subway" ? subwayColor(leg.line) : "#0b4dc9";
+              new kakao.maps.Polyline({
+                path: pts,
+                strokeWeight: 6,
+                strokeColor: color,
+                strokeOpacity: 0.9        // 버스·지하철 구간은 실선 (지하철은 노선 색)
+              }).setMap(map2);
+              pts.forEach(function (pt) { bounds.extend(pt); });
+              if (leg) {
+                new kakao.maps.CustomOverlay({
+                  position: pts[Math.floor(pts.length / 2)],
+                  content: '<div class="map-line-chip" style="background:' + color + '">' + leg.line + "</div>",
+                  yAnchor: 0.5
+                }).setMap(map2);
+              }
+              prev = pts[pts.length - 1];
+            });
+            walkLine(prev, p2);          // 하차 지점 → 목적지 도보
+            map2.setBounds(bounds, 60);
+          };
+
+          if (path._lanes) {
+            drawLanes(path._lanes);
+          } else if (path.mapObj) {
+            fetch("/api/route-lane?mapObj=" + encodeURIComponent(path.mapObj))
+              .then(function (res) { return res.json(); })
+              .then(function (d) {
+                if (d && d.ok && d.lanes && d.lanes.length) {
+                  path._lanes = d.lanes;
+                  drawLanes(d.lanes);
+                } else {
+                  drawStraight();
+                }
+              })
+              .catch(drawStraight);
+          } else {
+            drawStraight();
+          }
         }
       }
     });
@@ -1088,7 +1160,11 @@
         if (st.type === "walk") {
           label = ko ? "도보 이동" : "Walk";
           strongText = ko ? "걸어서 약 " + st.time + "분" : "Walk about " + st.time + " min";
-          pText = st.from && st.to ? st.from + " → " + st.to : (ko ? "안내 표지를 따라 이동하세요" : "Follow the signs");
+          var walkFrom = i === 0 ? s.stationName : (c.steps[i - 1].to || "");
+          var walkTo = i === c.steps.length - 1 ? r.destination : (c.steps[i + 1].from || "");
+          pText = walkFrom && walkTo
+            ? walkFrom + " → " + walkTo
+            : (ko ? "안내 표지를 따라 이동하세요" : "Follow the signs");
         } else if (st.type === "bus") {
           label = ko ? "버스 승차" : "Bus";
           strongText = ko ? st.line + "번 버스 타기" : "Board bus " + st.line;

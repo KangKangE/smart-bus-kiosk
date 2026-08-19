@@ -1148,6 +1148,15 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   white-space: nowrap;
   box-shadow: 0 4px 10px #15284a33;
 }
+.map-line-chip {
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+  box-shadow: 0 3px 8px #15284a33;
+}
 
 .settings-actions { justify-content: flex-end; gap: 12px; margin-top: 18px; display: flex; }
 .settings-actions .primary-button, .settings-actions .secondary-button { min-width: 190px; }
