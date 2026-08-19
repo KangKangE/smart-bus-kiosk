@@ -1158,6 +1158,43 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   box-shadow: 0 3px 8px #15284a33;
 }
 
+/* 경로선 견본 (단계 목록·지도 범례 공용) */
+.line-sample {
+  display: inline-block;
+  width: 34px;
+  height: 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.line-sample.line-walk {
+  background: repeating-linear-gradient(90deg, #7a8698 0 6px, #0000 6px 11px);
+}
+.journey-step .line-sample { margin-left: 6px; width: 28px; height: 5px; }
+
+.map-legend {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 10;
+  background: #fffffff2;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  box-shadow: 0 4px 12px #15284a1f;
+}
+.map-legend span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #424d5d;
+  font-size: 13px;
+  font-weight: 750;
+}
+.map-legend i { font-style: normal; }
+
 .settings-actions { justify-content: flex-end; gap: 12px; margin-top: 18px; display: flex; }
 .settings-actions .primary-button, .settings-actions .secondary-button { min-width: 190px; }
 

@@ -519,6 +519,28 @@
           bounds.extend(p1);
           bounds.extend(p2);
 
+          // 지도 왼쪽 아래 범례: 이 경로에 실제 나오는 구간들만 표시
+          (function () {
+            var koLang = state.language === "KO";
+            var items = [];
+            var walkAdded = false;
+            path.steps.forEach(function (st) {
+              if (st.type === "walk") {
+                if (!walkAdded) {
+                  items.push("<span><i class='line-sample line-walk'></i>" + (koLang ? "도보" : "Walk") + "</span>");
+                  walkAdded = true;
+                }
+              } else {
+                var color = st.type === "subway" ? subwayColor(st.line) : "#0b4dc9";
+                items.push("<span><i class='line-sample' style='background:" + color + "'></i>" + st.line + "</span>");
+              }
+            });
+            var legend = document.createElement("div");
+            legend.className = "map-legend";
+            legend.innerHTML = items.join("");
+            el2.appendChild(legend);
+          })();
+
           var walkLine = function (from, to) {
             new kakao.maps.Polyline({
               path: [from, to],
@@ -1174,10 +1196,14 @@
           strongText = ko ? st.line + " 타기" : "Take the " + st.line;
           pText = st.from + " → " + st.to + " · " + (ko ? st.stations + "개 역 · 약 " + st.time + "분" : st.stations + " stations · " + st.time + " min");
         }
+        // 지도의 경로선과 같은 모양의 선 견본 (도보=회색 점선, 버스=파랑, 지하철=노선색)
+        var lineSample = st.type === "walk"
+          ? '<span class="line-sample line-walk"></span>'
+          : '<span class="line-sample" style="background:' + (st.type === "subway" ? subwayColor(st.line) : "#0b4dc9") + '"></span>';
         stepsHtml +=
           '<div class="journey-step">' +
             '<span class="step-icon ' + cls + '">' + icon(iconName, 28) + "</span>" +
-            "<div><span>" + label + "</span><strong>" + strongText + "</strong><p>" + pText + "</p></div>" +
+            "<div><span>" + label + " " + lineSample + "</span><strong>" + strongText + "</strong><p>" + pText + "</p></div>" +
           "</div>";
       });
       var h1Text = leg
