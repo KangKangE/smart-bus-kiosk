@@ -225,9 +225,13 @@
     confirmListening: false, // 목적지 확인 화면에서 예/아니오 음성을 듣는 중
     kpi: null,               // KPI 집계 결과
     kpiError: "",
-    events: null,            // 최근 이벤트 목록 (개별 삭제용)
+    events: null,            // 로그 화면의 현재 페이지 이벤트 목록
+    eventsTotal: null,       // 전체 로그 개수
     eventsDevice: "",        // 특정 사용자(기기)만 보기 필터
+    logPage: 0,              // 로그 페이지 (0부터)
     recording: false,        // Gemini 오디오 녹음 중 (완료 버튼 표시용)
+    busRoute: null,          // 선택한 버스의 노선도 {bus, stops, ourIndex, busIndex}
+    busRouteError: "",
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -348,6 +352,8 @@
             minutes: b.minutes,
             next: b.next,
             msg1: "",
+            routeId: b.routeId || "",
+            prevStops: (typeof b.prevStops === "number") ? b.prevStops : null,
             lowFloor: !!b.lowFloor
           };
         });
@@ -362,6 +368,91 @@
 
   function getBuses() {
     return state.liveBuses || BUSES;
+  }
+
+  /* ---------- 버스 노선도 + 현재 위치 ---------- */
+  function openBusRoute(number) {
+    var bus = getBuses().filter(function (b) { return String(b.number) === String(number); })[0];
+    if (!bus) return;
+    state.busRoute = null;
+    state.busRouteError = "";
+    setScreen("busRoute");
+    var s = state.settings;
+    if (!bus.routeId || !s.cityCode) {
+      state.busRouteError = "이 정류장은 노선도 정보를 제공하지 않아요.";
+      render();
+      return;
+    }
+    fetch("/api/find-station?cityCode=" + encodeURIComponent(s.cityCode) + "&routeId=" + encodeURIComponent(bus.routeId))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var items = d && d.response && d.response.body && d.response.body.items && d.response.body.items.item;
+        if (!items) throw new Error("no stops");
+        if (!Array.isArray(items)) items = [items];
+        var stops = items
+          .map(function (it) { return { name: it.nodenm, ord: Number(it.nodeord), nodeId: String(it.nodeid) }; })
+          .filter(function (x) { return x.name; })
+          .sort(function (a, b) { return a.ord - b.ord; });
+        if (!stops.length) throw new Error("empty");
+        var ourIndex = -1;
+        for (var i = 0; i < stops.length; i++) {
+          if (stops[i].nodeId === String(s.stationId)) { ourIndex = i; break; }
+        }
+        if (ourIndex < 0) ourIndex = stops.findIndex(function (x) { return x.name.indexOf(s.stationName.split(".")[0]) !== -1; });
+        var busIndex = (ourIndex >= 0 && bus.prevStops != null) ? ourIndex - bus.prevStops : -1;
+        state.busRoute = { bus: bus, stops: stops, ourIndex: ourIndex, busIndex: busIndex };
+        if (state.screen === "busRoute") render();
+      })
+      .catch(function () {
+        state.busRouteError = "노선도를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.";
+        if (state.screen === "busRoute") render();
+      });
+  }
+
+  function renderBusRoute() {
+    var ko = state.language === "KO";
+    var br = state.busRoute;
+    var head =
+      '<div class="busroute-view content-view">' +
+        '<div class="result-heading compact-heading"><div>' +
+          '<p class="eyebrow">' + (ko ? "버스 노선도" : "Bus route") + "</p>" +
+          "<h1>" + (state.busRoute ? esc(state.busRoute.bus.number) + (ko ? "번 버스" : "") : (ko ? "노선도" : "Route")) + "</h1>" +
+        "</div></div>";
+    if (state.busRouteError) return head + '<p class="route-error">' + esc(state.busRouteError) + "</p></div>";
+    if (!br) return head + '<p class="station-msg">노선도를 불러오는 중…</p></div>';
+
+    var b = br.bus;
+    var summary =
+      '<div class="busroute-summary">' +
+        "<span>" + icon("bus", 24) +
+          (ko ? (b.prevStops != null
+            ? "지금 " + b.prevStops + "개 정류장 전에 있어요 · 약 " + b.minutes + "분 후 도착"
+            : "약 " + b.minutes + "분 후 도착")
+            : "Arriving in " + b.minutes + " min") + "</span>" +
+      "</div>";
+
+    // 우리 정류장 주변 위주로 보여주기 (전 구간은 너무 길 수 있음)
+    var stops = br.stops;
+    var startI = Math.max(0, (br.busIndex >= 0 ? br.busIndex : br.ourIndex) - 1);
+    var endI = Math.min(stops.length - 1, br.ourIndex + 4);
+    if (br.ourIndex < 0) { startI = 0; endI = Math.min(stops.length - 1, 12); }
+    var items = "";
+    for (var i = startI; i <= endI; i++) {
+      var isOur = i === br.ourIndex;
+      var isBus = i === br.busIndex;
+      items +=
+        '<div class="busroute-stop' + (isOur ? " stop-our" : "") + '">' +
+          '<span class="stop-dot' + (isBus ? " stop-dot-bus" : "") + '">' + (isBus ? icon("bus", 20) : "") + "</span>" +
+          '<span class="stop-name">' + esc(stops[i].name) + "</span>" +
+          (isOur ? '<span class="stop-here">' + (ko ? "여기 승차" : "Board here") + "</span>" : "") +
+          (isBus && !isOur ? '<span class="stop-buslabel">' + (ko ? "버스 위치" : "Bus here") + "</span>" : "") +
+        "</div>";
+    }
+    return head + summary +
+      '<div class="busroute-list">' + items + "</div>" +
+      (startI > 0 || endI < stops.length - 1 ? '<p class="station-msg">' + (ko ? "정류장이 많아 주변 구간만 표시했어요." : "Showing nearby stops only.") + "</p>" : "") +
+      '<button class="home-button" data-action="arrival">' + icon("back", 26) + (ko ? "도착 정보로" : "Back") + "</button>" +
+    "</div>";
   }
 
   function busDirection(bus) {
@@ -604,7 +695,7 @@
     // 명확한 '아니요' → 목적지 다시 받기
     if (isNo(t) && !isYes(t)) { reAskDestination(); return; }
     // 명확한 '네' → 첫 제안 채택
-    if (isYes(t)) { pickCandidate(0, "voice-yes"); return; }
+    if (isYes(t)) { pickCandidate(dc.sel || 0, "voice-yes"); return; }
     // 후보 이름과 두 글자씩 겹치는 정도로 가장 비슷한 후보 선택
     var best = -1, bestScore = 0;
     dc.candidates.forEach(function (c, i) {
@@ -728,10 +819,10 @@
         }
       }
 
-      // 목적지 확인 화면: 가장 유력한 후보 위치를 지도로 표시
-      if (state.screen === "routes" && state.destConfirm && state.destConfirm.candidates[0]) {
+      // 목적지 확인 화면: 현재 선택된 후보 위치를 지도로 표시
+      if (state.screen === "routes" && state.destConfirm && state.destConfirm.candidates.length) {
         var elc = document.querySelector(".confirm-map");
-        var c0 = state.destConfirm.candidates[0];
+        var c0 = state.destConfirm.candidates[state.destConfirm.sel || 0];
         var clat = parseFloat(c0.y), clng = parseFloat(c0.x);
         if (elc && isFinite(clat) && isFinite(clng)) {
           elc.classList.add("real-map");
@@ -914,16 +1005,19 @@
       });
   }
 
-  function loadEvents() {
-    var url = "/api/events?limit=60";
+  var LOG_PAGE_SIZE = 10;
+
+  function loadLog() {
+    var url = "/api/events?limit=" + LOG_PAGE_SIZE + "&offset=" + (state.logPage * LOG_PAGE_SIZE);
     if (state.eventsDevice) url += "&device=" + encodeURIComponent(state.eventsDevice);
     fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (d) {
         state.events = (d && d.ok && d.events) ? d.events : [];
-        if (state.screen === "kpi") render();
+        state.eventsTotal = (d && typeof d.total === "number") ? d.total : null;
+        if (state.screen === "log") render();
       })
-      .catch(function () { state.events = []; if (state.screen === "kpi") render(); });
+      .catch(function () { state.events = []; if (state.screen === "log") render(); });
   }
 
   function deleteEvent(id) {
@@ -931,10 +1025,9 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.ok) {
-          state.events = (state.events || []).filter(function (e) { return String(e.id) !== String(id); });
-          state.kpi = null;   // 삭제로 집계가 바뀌므로 다시 계산
+          state.events = null;   // 현재 페이지 다시 로드 (뒤 기록이 앞으로 당겨짐)
           render();
-          loadKpi();
+          loadLog();
         }
       })
       .catch(function () {});
@@ -975,7 +1068,10 @@
             "<h1>사용 데이터 통계</h1>" +
             '<p class="settings-intro">' + period + "</p>" +
           "</div>" +
-          '<button class="listen-button" data-action="kpi-refresh">' + icon("refresh", 26) + "새로고침</button>" +
+          '<div class="kpi-head-actions">' +
+            '<button class="listen-button" data-action="log">' + icon("map", 24) + "로그</button>" +
+            '<button class="listen-button" data-action="kpi-refresh">' + icon("refresh", 26) + "새로고침</button>" +
+          "</div>" +
         "</div>" +
         '<div class="kpi-grid">' +
           tile("사용 세션", k.sessions + "회", "기기 방문 기준") +
@@ -1003,7 +1099,6 @@
             cs.map(function (c) { return '<p class="kpi-comment">“' + esc(String(c)) + '”</p>'; }).join("") +
             "</div>";
         })() +
-        renderEventLog() +
       "</div>"
     );
   }
@@ -1017,20 +1112,32 @@
     idle_timeout: "5분 이탈", rating: "만족도 평가"
   };
 
-  function renderEventLog() {
+  function renderLog() {
+    var totalPages = state.eventsTotal != null ? Math.max(1, Math.ceil(state.eventsTotal / LOG_PAGE_SIZE)) : null;
     var head =
-      '<div class="kpi-bars event-log"><div class="event-log-head"><h2>개별 기록 · 삭제</h2>' +
-        (state.eventsDevice
-          ? '<button class="secondary-button event-clear" data-action="events-alldevice">전체 사용자 보기</button>'
-          : "") +
-        '<button class="test-button" data-action="events-refresh">' + icon("refresh", 20) + " 새로고침</button>" +
-      "</div>";
-    if (!state.events) {
-      return head + '<p class="station-msg">기록을 불러오는 중…</p></div>';
-    }
+      '<div class="log-view content-view">' +
+        '<div class="result-heading compact-heading">' +
+          "<div>" +
+            '<p class="eyebrow">DATA LOG</p>' +
+            "<h1>개별 기록 · 삭제</h1>" +
+            '<p class="settings-intro">' +
+              (state.eventsTotal != null ? "전체 " + state.eventsTotal + "건" : "기록 목록") +
+              (state.eventsDevice ? " · 사용자 “" + esc(state.eventsDevice.replace(/^dev-/, "")) + "”만 표시 중" : "") +
+            "</p>" +
+          "</div>" +
+          '<div class="kpi-head-actions">' +
+            (state.eventsDevice ? '<button class="listen-button" data-action="events-alldevice">전체 사용자</button>' : "") +
+            '<button class="listen-button" data-action="log-refresh">' + icon("refresh", 24) + "새로고침</button>" +
+          "</div>" +
+        "</div>";
+
+    if (!state.events) return head + '<p class="station-msg">기록을 불러오는 중…</p></div>';
     if (!state.events.length) {
-      return head + '<p class="station-msg">표시할 기록이 없습니다.</p></div>';
+      return head + '<p class="station-msg">표시할 기록이 없습니다.</p>' +
+        (state.logPage > 0 ? '<div class="log-pager"><button class="secondary-button" data-action="log-prev">‹ 이전</button></div>' : "") +
+        "</div>";
     }
+
     var rows = state.events.map(function (e) {
       var when = new Date(e.created_at).toLocaleString("ko-KR", {
         month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"
@@ -1050,9 +1157,16 @@
         "</div>"
       );
     }).join("");
-    return head +
-      (state.eventsDevice ? '<p class="station-msg">사용자 “' + esc(state.eventsDevice.replace(/^dev-/, "")) + '” 기록만 표시 중</p>' : "") +
-      '<div class="event-list">' + rows + "</div></div>";
+
+    var hasNext = totalPages != null ? (state.logPage + 1 < totalPages) : (state.events.length === LOG_PAGE_SIZE);
+    var pager =
+      '<div class="log-pager">' +
+        '<button class="secondary-button" data-action="log-prev"' + (state.logPage <= 0 ? " disabled" : "") + ">‹ 이전</button>" +
+        '<span class="log-page-num">' + (state.logPage + 1) + (totalPages != null ? " / " + totalPages : "") + " 페이지</span>" +
+        '<button class="secondary-button" data-action="log-next"' + (hasNext ? "" : " disabled") + ">다음 ›</button>" +
+      "</div>";
+
+    return head + '<div class="event-list">' + rows + "</div>" + pager + "</div>";
   }
 
   /* ---------- 정류장 검색 (관리자 설정) ---------- */
@@ -1484,6 +1598,11 @@
       case "kpi":
         speak("사용 데이터 KPI 통계 화면입니다.");
         break;
+      case "log":
+        speak("개별 기록 화면입니다.");
+        break;
+      case "busRoute":
+        break;
       case "saved":
         speak(lang === "KO" ? "설정이 저장되었습니다." : "Settings saved.");
         break;
@@ -1496,7 +1615,11 @@
   }
 
   function goBack() {
-    setScreen(state.screen === "routeDetail" ? "routes" : state.screen === "kpi" ? "settings" : "home");
+    setScreen(state.screen === "routeDetail" ? "routes"
+      : state.screen === "kpi" ? "settings"
+      : state.screen === "log" ? "kpi"
+      : state.screen === "busRoute" ? "arrival"
+      : "home");
   }
 
   /* ---------- 음성 인식 ---------- */
@@ -1803,8 +1926,8 @@
     /* 목적지 확인 단계: "이 도착지가 맞나요?" */
     if (state.destConfirm) {
       var dc = state.destConfirm;
-      var first = dc.candidates[0];
-      var others = dc.candidates.slice(1);
+      var sel = dc.sel || 0;
+      var selCand = dc.candidates[sel];
       return (
         '<div class="routes-view content-view">' +
           '<div class="result-heading route-heading"><div>' +
@@ -1819,19 +1942,20 @@
                     : "Listening · say “yes” or “no”") + "</div>"
             : "") +
           '<div class="confirm-card">' +
-            '<div class="confirm-map" aria-label="' + esc(first.name) + ' 위치 지도"></div>' +
+            '<div class="confirm-map" aria-label="' + esc(selCand.name) + ' 위치 지도"></div>' +
             '<div class="confirm-info">' +
-              '<span class="confirm-badge">' + icon("location", 20) + (ko ? "가장 가까운 곳" : "Best match") + "</span>" +
-              "<strong>" + esc(first.name) + "</strong>" +
-              '<p class="confirm-addr">' + esc(first.address || (ko ? "주소 정보 없음" : "No address")) + "</p>" +
-              (first.category ? '<p class="confirm-cat">' + esc(first.category) + "</p>" : "") +
-              '<button class="primary-button" data-action="dest-pick" data-idx="0">' + icon("check", 26) + (ko ? "네, 여기 맞아요" : "Yes, this one") + "</button>" +
+              '<span class="confirm-badge">' + icon("location", 20) + (sel === 0 ? (ko ? "가장 가까운 곳" : "Best match") : (ko ? "선택한 곳" : "Selected")) + "</span>" +
+              "<strong>" + esc(selCand.name) + "</strong>" +
+              '<p class="confirm-addr">' + esc(selCand.address || (ko ? "주소 정보 없음" : "No address")) + "</p>" +
+              (selCand.category ? '<p class="confirm-cat">' + esc(selCand.category) + "</p>" : "") +
+              '<button class="primary-button" data-action="dest-pick" data-idx="' + sel + '">' + icon("check", 26) + (ko ? "네, 여기 맞아요" : "Yes, this one") + "</button>" +
             "</div>" +
           "</div>" +
-          (others.length
-            ? '<p class="recent-title">' + (ko ? "아니라면 아래에서 누르거나 말씀해 주세요" : "Or choose / say one below") + "</p>" +
-              '<div class="candidate-list">' + others.map(function (p, oi) {
-                return '<button data-action="dest-pick" data-idx="' + (oi + 1) + '">' +
+          (dc.candidates.length > 1
+            ? '<p class="recent-title">' + (ko ? "다른 곳이면 눌러서 위치를 확인하세요" : "Tap another to see it on the map") + "</p>" +
+              '<div class="candidate-list">' + dc.candidates.map(function (p, ci) {
+                return '<button class="' + (ci === sel ? "cand-selected" : "") + '" data-action="dest-select" data-idx="' + ci + '">' +
+                  (ci === sel ? '<span class="cand-check">' + icon("check", 18) + "</span>" : "") +
                   "<strong>" + esc(p.name) + "</strong>" +
                   "<span>" + icon("location", 15) + esc(p.address || "") + "</span>" +
                   "</button>";
@@ -2265,6 +2389,8 @@
       case "language": body = renderLanguage(); break;
       case "settings": body = renderSettings(); break;
       case "kpi": body = renderKpi(); break;
+      case "log": body = renderLog(); break;
+      case "busRoute": body = renderBusRoute(); break;
       case "saved": body = renderSaved(); break;
     }
     screenEl.innerHTML = backHtml + body;
@@ -2284,7 +2410,7 @@
     if (idleTimer) window.clearTimeout(idleTimer);
     idleTimer = null;
     // 언어 선택(이미 첫 화면)·관리자 화면·음성 인식 중에는 타이머 없음
-    if (["language", "settings", "kpi", "listening"].indexOf(state.screen) !== -1) return;
+    if (["language", "settings", "kpi", "log", "busRoute", "listening"].indexOf(state.screen) !== -1) return;
     idleTimer = window.setTimeout(function () {
       logEvent("idle_timeout", { screen: state.screen });
       if (window.speechSynthesis) window.speechSynthesis.cancel();
@@ -2331,6 +2457,12 @@
       case "dest-pick":
         pickCandidate(parseInt(btn.getAttribute("data-idx"), 10) || 0, "tap");
         break;
+      case "dest-select":
+        if (state.destConfirm) {
+          state.destConfirm.sel = parseInt(btn.getAttribute("data-idx"), 10) || 0;
+          render();
+        }
+        break;
       case "confirm-listen":
         listenOnConfirm();
         break;
@@ -2342,35 +2474,46 @@
       case "kpi":
         state.kpi = null;
         state.kpiError = "";
-        state.events = null;
         setScreen("kpi");
         loadKpi();
-        loadEvents();
         break;
       case "kpi-refresh":
         state.kpi = null;
         state.kpiError = "";
-        state.events = null;
         render();
         loadKpi();
-        loadEvents();
         break;
-      case "events-refresh":
+      case "log":
+        state.events = null;
+        state.eventsTotal = null;
+        state.logPage = 0;
+        setScreen("log");
+        loadLog();
+        break;
+      case "log-refresh":
         state.events = null;
         render();
-        loadEvents();
+        loadLog();
+        break;
+      case "log-prev":
+        if (state.logPage > 0) { state.logPage--; state.events = null; render(); loadLog(); }
+        break;
+      case "log-next":
+        state.logPage++; state.events = null; render(); loadLog();
         break;
       case "events-device":
         state.eventsDevice = btn.getAttribute("data-device") || "";
+        state.logPage = 0;
         state.events = null;
         render();
-        loadEvents();
+        loadLog();
         break;
       case "events-alldevice":
         state.eventsDevice = "";
+        state.logPage = 0;
         state.events = null;
         render();
-        loadEvents();
+        loadLog();
         break;
       case "event-delete":
         deleteEvent(btn.getAttribute("data-id"));
@@ -2485,7 +2628,7 @@
         })();
         break;
       case "bus-row":
-        if (btn.getAttribute("data-bus") === "470") setScreen("routeDetail");
+        openBusRoute(btn.getAttribute("data-bus"));
         break;
       case "select-lang":
         selectLanguage(btn.getAttribute("data-lang"));

@@ -43,24 +43,28 @@ export default async function handler(req, res) {
       for (const it of items) {
         const no = String(it.routeno);
         const min = Math.max(0, Math.round(Number(it.arrtime) / 60));
+        const prev = Number(it.arrprevstationcnt);
         if (!byRoute[no]) {
           byRoute[no] = {
             number: no,
             direction: it.routetp || "",           // TAGO는 방면 정보가 없어 노선 유형을 표시
-            times: [min],
+            times: [{ min, prev: isFinite(prev) ? prev : null }],
+            routeId: it.routeid ? String(it.routeid) : "",
             lowFloor: it.vehicletp === "저상버스"
           };
         } else {
-          byRoute[no].times.push(min);
+          byRoute[no].times.push({ min, prev: isFinite(prev) ? prev : null });
         }
       }
       buses = Object.values(byRoute).map((r) => {
-        r.times.sort((a, b) => a - b);  // 같은 노선의 도착 시간이 순서 없이 와서 정렬 필요
+        r.times.sort((a, b) => a.min - b.min);  // 같은 노선의 도착 시간이 순서 없이 와서 정렬 필요
         return {
           number: r.number,
           direction: r.direction,
-          minutes: r.times[0],
-          next: r.times.length > 1 ? r.times[1] : null,
+          minutes: r.times[0].min,
+          next: r.times.length > 1 ? r.times[1].min : null,
+          prevStops: r.times[0].prev,            // 이 정류장까지 남은 정류장 수 (현재 위치)
+          routeId: r.routeId,
           lowFloor: r.lowFloor
         };
       });

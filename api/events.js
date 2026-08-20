@@ -22,15 +22,20 @@ export default async function handler(req, res) {
       return;
     }
 
-    // GET: 최근 기록 목록
+    // GET: 최근 기록 목록 (페이지네이션)
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 60));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
     let q = "/rest/v1/events?select=id,created_at,device_id,session_id,lang,event_type,payload" +
-      "&order=created_at.desc&limit=" + limit;
+      "&order=created_at.desc&limit=" + limit + "&offset=" + offset;
     if (req.query.device) q += "&device_id=eq." + encodeURIComponent(req.query.device);
     if (req.query.type) q += "&event_type=eq." + encodeURIComponent(req.query.type);
-    const r = await fetch(url + q, { headers });
+    // 전체 개수도 함께 (페이지 표시용)
+    const r = await fetch(url + q, { headers: Object.assign({ Prefer: "count=exact" }, headers) });
     if (!r.ok) throw new Error("Supabase 조회 실패: HTTP " + r.status);
-    res.status(200).json({ ok: true, events: await r.json() });
+    let total = null;
+    const cr = r.headers.get("content-range"); // 형식: 0-9/123
+    if (cr && cr.indexOf("/") !== -1) { const t = parseInt(cr.split("/")[1], 10); if (isFinite(t)) total = t; }
+    res.status(200).json({ ok: true, events: await r.json(), total: total });
   } catch (e) {
     res.status(200).json({ ok: false, error: String(e.message || e) });
   }
