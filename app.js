@@ -885,6 +885,7 @@
       '{"screen": "arrival | routes | routeDetail | station | home", "speech": "음성으로 읽어줄 답변", "destination": "목적지 이름", "routePref": "simple | fast"}\n' +
       "- screen 선택 기준: 버스 도착 시간 질문이면 arrival, 어딘가로 가는 방법·길찾기 질문이면 routes, 특정 경로의 자세한 탑승 방법이면 routeDetail, 정류장 위치·주변 시설 질문이면 station, 인사말이나 그 외 질문이면 home\n" +
       "- destination: 길찾기 질문일 때만 목적지 이름을 넣으세요 (예: 수원역). 그 외에는 빈 문자열.\n" +
+      "- 장소 이름(동네, 역, 건물 등)이 포함된 질문은 대부분 길찾기(routes)입니다. '안녕하세요' 같은 명확한 인사말일 때만 home을 쓰세요.\n" +
       "- routePref: 사용자가 '빨리', '급해', '가장 빠르게' 같은 서두르는 표현을 쓰면 fast, 그 외에는 simple (환승과 걷기가 적은 쉬운 길 우선).\n" +
       "- 길찾기 질문이면 speech는 '경로를 찾아드릴게요' 수준으로 아주 짧게 하세요. 상세 안내는 시스템이 따로 말합니다.\n" +
       "- speech: 반드시 " + langName + "(으)로, 노약자가 이해하기 쉬운 1~3개의 짧은 문장으로 답하세요.";
@@ -914,6 +915,11 @@
           routePref: result.routePref || "",
           ms: Date.now() - t0
         });
+        // 안전장치: 길찾기 표현이 있는데 home으로 분류됐다면 routes로 교정
+        var routeAsk = /(어떻게 가|가는 ?법|가고 ?싶|까지|가려면|how (do|can) i get|way to|行き方|怎么去)/i.test(userText);
+        if (result.screen === "home" && (result.destination || routeAsk)) {
+          result.screen = "routes";
+        }
         if (result.screen === "routes" && result.destination) {
           confirmDestination(result.destination, result.routePref === "fast" ? "fast" : "simple");
           return;
@@ -1067,6 +1073,8 @@
   }
 
   function startListening() {
+    // 안내 음성이 나오는 중이면 즉시 중단 — 스피커 소리가 마이크에 섞여 인식을 오염시킴
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     state.transcript = "";
     state.screen = "listening";
 
