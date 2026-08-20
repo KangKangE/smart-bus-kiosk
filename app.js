@@ -28,6 +28,10 @@
     return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON_PATHS[name] + "</svg>";
   }
 
+  function esc(v) {
+    return String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
   /* ---------- 다국어 문구 ---------- */
   var STRINGS = {
     KO: {
@@ -215,6 +219,7 @@
     nearby: null,            // 주변 시설 (Kakao 카테고리 검색 결과)
     geminiAvailable: null,   // Vercel에 GEMINI_API_KEY가 설정돼 있는지 (null=확인 중)
     rated: {},               // 만족도 평가 완료 여부 (중복 방지)
+    ratingStars: {},         // 제출 전 선택한 별점 (화면별)
     destConfirm: null,       // 목적지 확인 단계 {query, pref, candidates}
     kpi: null,               // KPI 집계 결과
     kpiError: "",
@@ -821,11 +826,24 @@
           tile("AI 의도 파악", k.ai.calls + "건", "평균 응답 " + (k.ai.avgMs == null ? "—" : k.ai.avgMs + "ms") + " · 대체동작 " + fmtPct(k.ai.fallbackRate)) +
           tile("길찾기 성공률", fmtPct(k.route.successRate), "성공 " + k.route.searches + " · 실패 " + k.route.fails) +
           tile("추천 경로 채택률", fmtPct(k.route.topPickRate), "경로 상세보기 " + k.route.selects + "회") +
-          tile("만족도 👍", fmtPct(k.rating.satisfaction), "도움됐어요 " + k.rating.up + " · 아쉬워요 " + k.rating.down) +
+          tile("만족도 (5점 만점)", (k.rating.avg == null ? "—" : k.rating.avg.toFixed(2) + "점"), "평가 " + k.rating.count + "건") +
         "</div>" +
+        (function () {
+          var d = k.rating.dist || [];
+          if (!k.rating.count) return "";
+          var entries = [5, 4, 3, 2, 1].map(function (n) { return [n + "점", d[n - 1] || 0]; });
+          return barList("별점 분포", entries);
+        })() +
         barList("언어별 선택 횟수", k.langs) +
         barList("인기 목적지 TOP 5", k.dests) +
         barList("이탈(5분 무응답)이 발생한 화면", k.idles) +
+        (function () {
+          var cs = k.rating.comments || [];
+          if (!cs.length) return "";
+          return '<div class="kpi-bars"><h2>최근 의견</h2>' +
+            cs.map(function (c) { return '<p class="kpi-comment">“' + esc(String(c)) + '”</p>'; }).join("") +
+            "</div>";
+        })() +
       "</div>"
     );
   }
@@ -979,19 +997,38 @@
     speak(arrivalsSpeechText());
   }
 
-  /* ---------- 만족도 평가 (👍/👎) ---------- */
+  /* ---------- 만족도 평가 (별점 5점 + 의견) ---------- */
   function ratingBlock(ctx) {
     var ko = state.language === "KO";
+    var lang = state.language;
     if (state.rated[ctx]) {
       return '<div class="rating-block rating-done">' +
-        (ko ? "소중한 의견 감사합니다!" : state.language === "JA" ? "ご意見ありがとうございます！" : state.language === "ZH" ? "感谢您的反馈！" : "Thank you for your feedback!") +
+        (ko ? "소중한 의견 감사합니다!" : lang === "JA" ? "ご意見ありがとうございます！" : lang === "ZH" ? "感谢您的反馈！" : "Thank you for your feedback!") +
         "</div>";
     }
+    var selected = state.ratingStars[ctx] || 0;
+    var stars = "";
+    for (var i = 1; i <= 5; i++) {
+      stars += '<button class="star-btn' + (i <= selected ? " star-on" : "") + '" data-action="rate-star" data-ctx="' +
+        esc(ctx) + '" data-value="' + i + '" aria-label="' + i + (ko ? "점" : " stars") + '">' +
+        (i <= selected ? "★" : "☆") + "</button>";
+    }
+    var question = ko ? "이 안내에 얼마나 만족하시나요?"
+      : lang === "JA" ? "このご案内にどのくらい満足されましたか？"
+      : lang === "ZH" ? "您对此信息的满意度如何？"
+      : "How satisfied are you with this guidance?";
+    var placeholder = ko ? "의견을 남겨주세요 (선택)"
+      : lang === "JA" ? "ご意見をお書きください（任意）"
+      : lang === "ZH" ? "请留下您的意见（可选）"
+      : "Leave a comment (optional)";
+    var submitLabel = ko ? "평가 보내기" : lang === "JA" ? "送信" : lang === "ZH" ? "提交" : "Submit";
     return (
-      '<div class="rating-block">' +
-        "<span>" + (ko ? "이 안내가 도움이 되었나요?" : state.language === "JA" ? "このご案内は役に立ちましたか？" : state.language === "ZH" ? "此信息对您有帮助吗？" : "Was this helpful?") + "</span>" +
-        '<button data-action="rate" data-value="up" data-ctx="' + ctx + '">👍 ' + (ko ? "도움됐어요" : "Yes") + "</button>" +
-        '<button data-action="rate" data-value="down" data-ctx="' + ctx + '">👎 ' + (ko ? "아쉬워요" : "No") + "</button>" +
+      '<div class="rating-block rating-stars-block">' +
+        '<span class="rating-q">' + question + "</span>" +
+        '<div class="star-row" data-ctx="' + esc(ctx) + '">' + stars + "</div>" +
+        '<textarea class="rating-comment" id="rating-comment-' + esc(ctx) + '" rows="2" placeholder="' + placeholder + '"></textarea>' +
+        '<button class="primary-button rating-submit" data-action="rate-submit" data-ctx="' + esc(ctx) + '"' +
+          (selected ? "" : " disabled") + ">" + submitLabel + "</button>" +
       "</div>"
     );
   }
@@ -1654,9 +1691,6 @@
 
   function renderSettings() {
     var s = state.settings;
-    function esc(v) {
-      return String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
     return (
       '<div class="settings-view content-view">' +
         '<div class="result-heading compact-heading">' +
@@ -1815,6 +1849,8 @@
       state.destConfirm = null;
       state.transcript = "";
       state.rated = {};
+      state.ratingStars = {};
+      state.ratingDraft = {};
       setScreen("language");
     }, 300000);
   }
@@ -1887,12 +1923,29 @@
           setScreen("routeDetail");
         }
         break;
-      case "rate":
+      case "rate-star":
         (function () {
-          var value = btn.getAttribute("data-value");
           var ctx = btn.getAttribute("data-ctx");
+          var value = parseInt(btn.getAttribute("data-value"), 10) || 0;
+          // 이미 입력한 의견을 다시 그리며 잃지 않도록 보존
+          var ta = document.getElementById("rating-comment-" + ctx);
+          state.ratingStars[ctx] = value;
+          state.ratingDraft = state.ratingDraft || {};
+          if (ta) state.ratingDraft[ctx] = ta.value;
+          render();
+          var restored = document.getElementById("rating-comment-" + ctx);
+          if (restored && state.ratingDraft[ctx]) restored.value = state.ratingDraft[ctx];
+        })();
+        break;
+      case "rate-submit":
+        (function () {
+          var ctx = btn.getAttribute("data-ctx");
+          var stars = state.ratingStars[ctx] || 0;
+          if (!stars) return;
+          var ta = document.getElementById("rating-comment-" + ctx);
+          var comment = ta ? ta.value.trim().slice(0, 500) : "";
           state.rated[ctx] = true;
-          logEvent("rating", { value: value, context: ctx });
+          logEvent("rating", { stars: stars, comment: comment, context: ctx });
           render();
           speak(state.language === "KO" ? "소중한 의견 감사합니다."
             : state.language === "JA" ? "ご意見ありがとうございます。"

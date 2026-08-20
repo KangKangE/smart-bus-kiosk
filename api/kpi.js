@@ -41,8 +41,15 @@ export default async function handler(req, res) {
     const selects = rows.filter((e) => e.event_type === "route_select");
     const selTop = selects.filter((e) => Number(e.payload && e.payload.index) === 0).length;
 
-    const ups = rows.filter((e) => e.event_type === "rating" && e.payload && e.payload.value === "up").length;
-    const downs = rows.filter((e) => e.event_type === "rating" && e.payload && e.payload.value === "down").length;
+    const ratingRows = rows.filter((e) => e.event_type === "rating");
+    const stars = ratingRows
+      .map((e) => Number(e.payload && e.payload.stars))
+      .filter((n) => isFinite(n) && n >= 1 && n <= 5);
+    const starDist = [1, 2, 3, 4, 5].map((n) => stars.filter((s) => s === n).length);
+    const comments = ratingRows
+      .map((e) => e.payload && e.payload.comment)
+      .filter((c) => c && String(c).trim())
+      .slice(0, 20);
 
     const langs = tally(rows.filter((e) => e.event_type === "language_select").map((e) => e.payload && e.payload.selected));
     const dests = tally(rows.filter((e) => e.event_type === "route_search").map((e) => e.payload && e.payload.found)).slice(0, 5);
@@ -73,7 +80,12 @@ export default async function handler(req, res) {
           selects: selects.length,
           topPickRate: pct(selTop, selects.length)
         },
-        rating: { up: ups, down: downs, satisfaction: pct(ups, ups + downs) },
+        rating: {
+          count: stars.length,
+          avg: stars.length ? Math.round(avg(stars) * 100) / 100 : null,
+          dist: starDist,
+          comments: comments
+        },
         langs,
         dests,
         idles

@@ -1234,28 +1234,60 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   border: 1px solid var(--line);
   background: #fff;
   border-radius: 20px;
-  justify-content: center;
-  align-items: center;
-  gap: 14px;
   margin-top: 18px;
-  padding: 14px 20px;
+  padding: 20px;
   font-size: 18px;
   font-weight: 750;
+}
+.rating-stars-block {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
 }
-.rating-block button {
-  border: 2px solid var(--line);
-  background: #f8fafc;
-  border-radius: 100px;
-  min-height: 54px;
-  padding: 0 22px;
-  font-size: 18px;
-  font-weight: 800;
+.rating-q { font-size: 20px; font-weight: 800; color: var(--ink); text-align: center; }
+.star-row { display: flex; gap: 6px; }
+.star-btn {
+  border: 0;
+  background: 0 0;
   cursor: pointer;
+  font-size: 46px;
+  line-height: 1;
+  color: #d9e0e9;
+  padding: 2px 4px;
+  transition: transform .1s;
 }
-.rating-block button:hover { border-color: var(--blue); background: var(--blue-soft); }
-.rating-block.rating-done { color: var(--green); background: #e7f6ef; border-color: #bfe7d2; }
+.star-btn.star-on { color: #f5a623; }
+.star-btn:hover { transform: scale(1.15); }
+.rating-comment {
+  width: 100%;
+  max-width: 560px;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcfd;
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  padding: 12px 14px;
+  resize: vertical;
+  min-height: 60px;
+}
+.rating-comment:focus { border-color: var(--blue); outline: 4px solid #cbdcff; }
+.rating-submit { min-width: 220px; }
+.rating-submit:disabled { opacity: .5; cursor: not-allowed; }
+.rating-block.rating-done { color: var(--green); background: #e7f6ef; border-color: #bfe7d2; text-align: center; }
+
+.kpi-comment {
+  border-left: 3px solid var(--blue);
+  background: #f6f8fb;
+  border-radius: 0 10px 10px 0;
+  padding: 9px 13px;
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
 
 /* 승차·하차 정류장 강조 표시 */
 .stop-tag {
