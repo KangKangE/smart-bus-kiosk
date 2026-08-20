@@ -220,6 +220,7 @@
     geminiAvailable: null,   // Vercel에 GEMINI_API_KEY가 설정돼 있는지 (null=확인 중)
     rated: {},               // 만족도 평가 완료 여부 (중복 방지)
     ratingStars: {},         // 제출 전 선택한 별점 (화면별)
+    ratingDraft: {},         // 제출 전 입력한 의견 (화면별, 재렌더 시 보존)
     destConfirm: null,       // 목적지 확인 단계 {query, pref, candidates}
     confirmListening: false, // 목적지 확인 화면에서 예/아니오 음성을 듣는 중
     kpi: null,               // KPI 집계 결과
@@ -1087,6 +1088,35 @@
     speak(arrivalsSpeechText());
   }
 
+  /* 의견을 음성으로 받아 입력칸에 채운다 (평가 화면) */
+  function dictateComment(ctx) {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var ta = document.getElementById("rating-comment-" + ctx);
+    if (!Recognition) {
+      if (ta) ta.setAttribute("placeholder", "이 기기에서는 음성 입력을 지원하지 않아요. 직접 입력해 주세요.");
+      return;
+    }
+    var micBtn = document.querySelector('.rating-mic[data-ctx="' + ctx + '"]');
+    if (micBtn) micBtn.classList.add("mic-active");
+    var rec = new Recognition();
+    rec.lang = localeFor(state.language);
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = function (e) {
+      var text = e.results[0][0].transcript;
+      var box = document.getElementById("rating-comment-" + ctx);
+      var prev = box ? box.value : (state.ratingDraft[ctx] || "");
+      var combined = prev ? (prev + " " + text) : text;
+      state.ratingDraft[ctx] = combined;
+      if (box) box.value = combined;
+    };
+    rec.onerror = function () {};
+    rec.onend = function () { recognitionRef = null; if (micBtn) micBtn.classList.remove("mic-active"); };
+    recognitionRef = rec;
+    try { rec.start(); } catch (e) { if (micBtn) micBtn.classList.remove("mic-active"); }
+  }
+
   /* ---------- 만족도 평가 (별점 5점 + 의견) ---------- */
   function ratingBlock(ctx) {
     var ko = state.language === "KO";
@@ -1112,11 +1142,15 @@
       : lang === "ZH" ? "请留下您的意见（可选）"
       : "Leave a comment (optional)";
     var submitLabel = ko ? "평가 보내기" : lang === "JA" ? "送信" : lang === "ZH" ? "提交" : "Submit";
+    var micLabel = ko ? "음성으로 의견 말하기" : lang === "JA" ? "音声で意見を話す" : lang === "ZH" ? "用语音留言" : "Speak your comment";
     return (
       '<div class="rating-block rating-stars-block">' +
         '<span class="rating-q">' + question + "</span>" +
         '<div class="star-row" data-ctx="' + esc(ctx) + '">' + stars + "</div>" +
-        '<textarea class="rating-comment" id="rating-comment-' + esc(ctx) + '" rows="2" placeholder="' + placeholder + '"></textarea>' +
+        '<div class="rating-comment-row">' +
+          '<textarea class="rating-comment" id="rating-comment-' + esc(ctx) + '" rows="2" placeholder="' + placeholder + '"></textarea>' +
+          '<button class="rating-mic" data-action="rate-voice" data-ctx="' + esc(ctx) + '" aria-label="' + micLabel + '" title="' + micLabel + '">' + icon("mic", 26) + "</button>" +
+        "</div>" +
         '<button class="primary-button rating-submit" data-action="rate-submit" data-ctx="' + esc(ctx) + '"' +
           (selected ? "" : " disabled") + ">" + submitLabel + "</button>" +
       "</div>"
@@ -1936,6 +1970,11 @@
     resetIdleTimer();
     if (state.screen === "station") ensureNearby();
     mountMaps();
+    // 평가 의견 입력값 복원 (버스 실시간 갱신 등으로 재렌더돼도 유실되지 않도록)
+    Object.keys(state.ratingDraft).forEach(function (ctx) {
+      var ta = document.getElementById("rating-comment-" + ctx);
+      if (ta && state.ratingDraft[ctx]) ta.value = state.ratingDraft[ctx];
+    });
   }
 
   /* ---------- 5분 무조작 시 첫 화면(언어 선택)으로 복귀 ---------- */
@@ -2044,14 +2083,18 @@
           if (restored && state.ratingDraft[ctx]) restored.value = state.ratingDraft[ctx];
         })();
         break;
+      case "rate-voice":
+        dictateComment(btn.getAttribute("data-ctx"));
+        break;
       case "rate-submit":
         (function () {
           var ctx = btn.getAttribute("data-ctx");
           var stars = state.ratingStars[ctx] || 0;
           if (!stars) return;
           var ta = document.getElementById("rating-comment-" + ctx);
-          var comment = ta ? ta.value.trim().slice(0, 500) : "";
+          var comment = ((ta ? ta.value : state.ratingDraft[ctx]) || "").trim().slice(0, 500);
           state.rated[ctx] = true;
+          delete state.ratingDraft[ctx];
           logEvent("rating", { stars: stars, comment: comment, context: ctx });
           render();
           speak(state.language === "KO" ? "소중한 의견 감사합니다."
@@ -2186,6 +2229,12 @@
 
   /* 설정 입력 (포커스 유지를 위해 전체 렌더링 없이 상태만 갱신) */
   document.addEventListener("input", function (e) {
+    // 평가 의견은 입력할 때마다 초안으로 저장 (재렌더 시 복원용)
+    if (e.target.classList && e.target.classList.contains("rating-comment")) {
+      var cctx = (e.target.id || "").replace("rating-comment-", "");
+      if (cctx) state.ratingDraft[cctx] = e.target.value;
+      return;
+    }
     var field = e.target.getAttribute && e.target.getAttribute("data-field");
     if (!field) return;
     state.settings[field] = e.target.value;

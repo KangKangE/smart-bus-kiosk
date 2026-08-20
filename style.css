@@ -1273,9 +1273,16 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 }
 .star-btn.star-on { color: #f5a623; }
 .star-btn:hover { transform: scale(1.15); }
-.rating-comment {
+.rating-comment-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
   width: 100%;
   max-width: 560px;
+}
+.rating-comment {
+  flex: 1;
+  min-width: 0;
   border: 2px solid var(--line);
   border-radius: 14px;
   background: #fbfcfd;
@@ -1287,6 +1294,19 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   resize: vertical;
   min-height: 60px;
 }
+.rating-mic {
+  flex: none;
+  width: 60px;
+  border: 2px solid var(--blue);
+  border-radius: 14px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.rating-mic:hover { background: var(--blue); color: #fff; }
+.rating-mic.mic-active { background: var(--red); border-color: var(--red); color: #fff; animation: 1.2s ease-in-out infinite pulse; }
 .rating-comment:focus { border-color: var(--blue); outline: 4px solid #cbdcff; }
 .rating-submit { min-width: 220px; }
 .rating-submit:disabled { opacity: .5; cursor: not-allowed; }
