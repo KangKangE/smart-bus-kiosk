@@ -36,6 +36,11 @@ export default async function handler(req, res) {
     const aiMs = aiRows.map((e) => Number(e.payload && e.payload.ms)).filter((n) => isFinite(n));
     const aiFallback = count("ai_fallback");
 
+    // Gemini가 판정한 STT 인식 품질 (문장이 자연스러운지)
+    const sttRows = rows.filter((e) => e.event_type === "stt_quality");
+    const sttScores = sttRows.map((e) => Number(e.payload && e.payload.quality)).filter((n) => isFinite(n));
+    const sttClearCnt = sttRows.filter((e) => e.payload && e.payload.clear).length;
+
     const rs = count("route_search");
     const rf = count("route_search_fail");
     const selects = rows.filter((e) => e.event_type === "route_select");
@@ -78,6 +83,11 @@ export default async function handler(req, res) {
           avgMs: aiMs.length ? Math.round(avg(aiMs)) : null,
           fallback: aiFallback,
           fallbackRate: pct(aiFallback, aiRows.length + aiFallback)
+        },
+        stt: {
+          judged: sttRows.length,
+          clearRate: pct(sttClearCnt, sttRows.length),
+          avgQuality: sttScores.length ? Math.round(avg(sttScores) * 100) / 100 : null
         },
         route: {
           searches: rs,

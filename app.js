@@ -913,6 +913,7 @@
         '<div class="kpi-grid">' +
           tile("사용 세션", k.sessions + "회", "기기 방문 기준") +
           tile("음성 인식 성공률", fmtPct(k.voice.successRate), "시도 " + k.voice.attempts + "회 · 평균 신뢰도 " + (k.voice.avgConfidence == null ? "—" : k.voice.avgConfidence + "%")) +
+          tile("AI 인식 품질 (문장 정확도)", fmtPct(k.stt.clearRate), "판정 " + k.stt.judged + "건 · 평균 " + (k.stt.avgQuality == null ? "—" : k.stt.avgQuality + "/5")) +
           tile("AI 의도 파악", k.ai.calls + "건", "평균 응답 " + (k.ai.avgMs == null ? "—" : k.ai.avgMs + "ms") + " · 대체동작 " + fmtPct(k.ai.fallbackRate)) +
           tile("길찾기 성공률", fmtPct(k.route.successRate), "성공 " + k.route.searches + " · 실패 " + k.route.fails) +
           tile("목적지 음성 확인 성공률", fmtPct(k.destConfirm.recogRate), "확인 " + k.destConfirm.total + "회 · 첫 제안 정확 " + fmtPct(k.destConfirm.topRate) + " · 재요청 " + k.destConfirm.rejected) +
@@ -991,11 +992,13 @@
       "\n\n[버스 도착 정보]\n" + busInfo +
       "\n\n[길찾기 정보]\n강남역 방면: 470번 직행 (4분 후 도착, 약 32분 소요, 12개 정류장, 환승 없음), 대안 741번 (7분 후 도착, 약 37분 소요, 14개 정류장)." +
       "\n\n사용자의 말을 듣고 반드시 아래 형식의 JSON 하나만 출력하세요:\n" +
-      '{"screen": "arrival | routes | routeDetail | station | home", "speech": "음성으로 읽어줄 답변", "destination": "목적지 이름", "routePref": "simple | fast"}\n' +
+      '{"screen": "arrival | routes | routeDetail | station | home", "speech": "음성으로 읽어줄 답변", "destination": "목적지 이름", "routePref": "simple | fast", "sttQuality": 1~5, "sttClear": true/false}\n' +
       "- screen 선택 기준: 버스 도착 시간 질문이면 arrival, 어딘가로 가는 방법·길찾기 질문이면 routes, 특정 경로의 자세한 탑승 방법이면 routeDetail, 정류장 위치·주변 시설 질문이면 station, 인사말이나 그 외 질문이면 home\n" +
       "- destination: 길찾기 질문일 때만 목적지 이름을 넣으세요 (예: 수원역). 그 외에는 빈 문자열.\n" +
       "- 장소 이름(동네, 역, 건물 등)이 포함된 질문은 대부분 길찾기(routes)입니다. '안녕하세요' 같은 명확한 인사말일 때만 home을 쓰세요.\n" +
       "- routePref: 사용자가 '빨리', '급해', '가장 빠르게' 같은 서두르는 표현을 쓰면 fast, 그 외에는 simple (환승과 걷기가 적은 쉬운 길 우선).\n" +
+      "- sttQuality: 음성 인식된 이 문장이 버스 정류장에서 할 만한 자연스럽고 말이 되는 요청인지 1~5로 평가하세요 (5=완전히 자연스럽고 명확함, 3=대체로 알아들을 수 있음, 1=깨졌거나 뜻이 통하지 않아 오인식으로 보임).\n" +
+      "- sttClear: 오인식 없이 제대로 인식된 문장으로 보이면 true, 어색하거나 깨져 보이면 false.\n" +
       "- 길찾기 질문이면 speech는 '경로를 찾아드릴게요' 수준으로 아주 짧게 하세요. 상세 안내는 시스템이 따로 말합니다.\n" +
       "- speech: 반드시 " + langName + "(으)로, 노약자가 이해하기 쉬운 1~3개의 짧은 문장으로 답하세요.";
   }
@@ -1024,6 +1027,15 @@
           routePref: result.routePref || "",
           ms: Date.now() - t0
         });
+        // Gemini가 STT 인식 문장의 자연스러움을 판정 → 진짜 인식 품질 지표
+        var q = Number(result.sttQuality);
+        if (isFinite(q) && q >= 1 && q <= 5) {
+          logEvent("stt_quality", {
+            query: userText,
+            quality: Math.round(q),
+            clear: result.sttClear !== false && q >= 3
+          });
+        }
         // 안전장치: 길찾기 표현이 있는데 home으로 분류됐다면 routes로 교정
         var routeAsk = /(어떻게 가|가는 ?법|가고 ?싶|까지|가려면|how (do|can) i get|way to|行き方|怎么去)/i.test(userText);
         if (result.screen === "home" && (result.destination || routeAsk)) {
