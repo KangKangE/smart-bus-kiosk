@@ -1823,15 +1823,16 @@
         "<h1>" + (heard ? "“" + heard + "”" : t.listening) + "</h1>" +
         '<p class="listening-copy">' + (heard ? (ko ? "가장 알맞은 정보를 찾고 있어요." : "Finding the best answer…") : t.listeningHint) + "</p>" +
         (state.recording
-          ? '<button class="example-chip" data-action="voice-stop">' + (ko ? "✓ 말 다 했어요" : "✓ Done speaking") + "</button>"
+          ? '<button class="done-button" data-action="voice-stop">' + icon("check", 30) + (ko ? "말 다 했어요" : "Done speaking") + "</button>"
           : "") +
+        // 음성 인식이 안 되는 기기에서만 예시 질문 버튼 제공
         (!state.voiceSupported
-          ? '<p class="support-note">' + (ko ? "이 기기에서는 예시 질문을 눌러 화면을 체험할 수 있어요." : "Voice input is unavailable here. Choose a sample question below.") + "</p>"
+          ? '<p class="support-note">' + (ko ? "이 기기에서는 예시 질문을 눌러 화면을 체험할 수 있어요." : "Voice input is unavailable here. Choose a sample question below.") + "</p>" +
+            '<div class="sample-questions">' +
+              '<button data-action="routes">' + (ko ? "“강남역 가는 버스 알려줘”" : "“How do I get to Gangnam?”") + "</button>" +
+              '<button data-action="arrival">' + (ko ? "“470번 언제 와?”" : "“When does bus 470 arrive?”") + "</button>" +
+            "</div>"
           : "") +
-        '<div class="sample-questions">' +
-          '<button data-action="routes">' + (ko ? "“강남역 가는 버스 알려줘”" : "“How do I get to Gangnam?”") + "</button>" +
-          '<button data-action="arrival">' + (ko ? "“470번 언제 와?”" : "“When does bus 470 arrive?”") + "</button>" +
-        "</div>" +
         '<button class="cancel-button" data-action="cancel">' + icon("x", 30) + t.cancel + "</button>" +
       "</div>"
     );

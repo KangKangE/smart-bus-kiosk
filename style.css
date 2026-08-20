@@ -331,20 +331,38 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   font-weight: 760;
 }
 
-.cancel-button {
-  border: 2px solid var(--line);
-  min-width: 260px;
-  min-height: 78px;
-  color: var(--ink);
+.done-button {
+  border: 0;
+  min-width: 300px;
+  min-height: 84px;
+  color: #fff;
   cursor: pointer;
-  background: #fff;
-  border-radius: 20px;
+  background: var(--blue);
+  border-radius: 22px;
   justify-content: center;
   align-items: center;
   gap: 12px;
-  margin: 38px auto 0;
-  font-size: 23px;
-  font-weight: 800;
+  margin: 34px auto 0;
+  font-size: 26px;
+  font-weight: 850;
+  display: flex;
+  box-shadow: 0 12px 30px #0b4dc93b;
+}
+.done-button:hover { background: var(--blue-dark); }
+.cancel-button {
+  border: 2px solid var(--line);
+  min-width: 200px;
+  min-height: 64px;
+  color: var(--muted);
+  cursor: pointer;
+  background: #fff;
+  border-radius: 18px;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin: 16px auto 0;
+  font-size: 19px;
+  font-weight: 750;
   display: flex;
 }
 
