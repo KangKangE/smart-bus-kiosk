@@ -225,6 +225,8 @@
     confirmListening: false, // 목적지 확인 화면에서 예/아니오 음성을 듣는 중
     kpi: null,               // KPI 집계 결과
     kpiError: "",
+    events: null,            // 최근 이벤트 목록 (개별 삭제용)
+    eventsDevice: "",        // 특정 사용자(기기)만 보기 필터
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -873,6 +875,32 @@
       });
   }
 
+  function loadEvents() {
+    var url = "/api/events?limit=60";
+    if (state.eventsDevice) url += "&device=" + encodeURIComponent(state.eventsDevice);
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        state.events = (d && d.ok && d.events) ? d.events : [];
+        if (state.screen === "kpi") render();
+      })
+      .catch(function () { state.events = []; if (state.screen === "kpi") render(); });
+  }
+
+  function deleteEvent(id) {
+    fetch("/api/events?id=" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) {
+          state.events = (state.events || []).filter(function (e) { return String(e.id) !== String(id); });
+          state.kpi = null;   // 삭제로 집계가 바뀌므로 다시 계산
+          render();
+          loadKpi();
+        }
+      })
+      .catch(function () {});
+  }
+
   function renderKpi() {
     var k = state.kpi;
     if (state.kpiError) {
@@ -936,8 +964,56 @@
             cs.map(function (c) { return '<p class="kpi-comment">“' + esc(String(c)) + '”</p>'; }).join("") +
             "</div>";
         })() +
+        renderEventLog() +
       "</div>"
     );
+  }
+
+  var EVENT_LABELS = {
+    session_start: "세션 시작", screen_view: "화면 이동", language_select: "언어 선택",
+    voice_result: "음성 인식", voice_error: "인식 오류", ai_intent: "AI 의도",
+    ai_fallback: "AI 대체", keyword_intent: "키워드 의도", stt_quality: "인식 품질",
+    route_search: "길찾기", route_search_fail: "길찾기 실패", route_select: "경로 선택",
+    dest_confirm_shown: "목적지 확인", dest_pick: "목적지 선택", dest_confirm_result: "확인 결과",
+    idle_timeout: "5분 이탈", rating: "만족도 평가"
+  };
+
+  function renderEventLog() {
+    var head =
+      '<div class="kpi-bars event-log"><div class="event-log-head"><h2>개별 기록 · 삭제</h2>' +
+        (state.eventsDevice
+          ? '<button class="secondary-button event-clear" data-action="events-alldevice">전체 사용자 보기</button>'
+          : "") +
+        '<button class="test-button" data-action="events-refresh">' + icon("refresh", 20) + " 새로고침</button>" +
+      "</div>";
+    if (!state.events) {
+      return head + '<p class="station-msg">기록을 불러오는 중…</p></div>';
+    }
+    if (!state.events.length) {
+      return head + '<p class="station-msg">표시할 기록이 없습니다.</p></div>';
+    }
+    var rows = state.events.map(function (e) {
+      var when = new Date(e.created_at).toLocaleString("ko-KR", {
+        month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+      var label = EVENT_LABELS[e.event_type] || e.event_type;
+      var pay = "";
+      try { pay = JSON.stringify(e.payload || {}); } catch (x) { pay = ""; }
+      if (pay === "{}") pay = "";
+      var dev = (e.device_id || "").replace(/^dev-/, "");
+      return (
+        '<div class="event-row">' +
+          '<span class="event-time">' + when + "</span>" +
+          '<button class="event-dev" data-action="events-device" data-device="' + esc(e.device_id || "") + '" title="이 사용자 기록만 보기">' + esc(dev || "-") + "</button>" +
+          '<span class="event-type">' + esc(label) + "</span>" +
+          '<span class="event-payload" title="' + esc(pay) + '">' + esc(pay.slice(0, 90)) + "</span>" +
+          '<button class="event-del" data-action="event-delete" data-id="' + e.id + '" aria-label="삭제">' + icon("x", 20) + "</button>" +
+        "</div>"
+      );
+    }).join("");
+    return head +
+      (state.eventsDevice ? '<p class="station-msg">사용자 “' + esc(state.eventsDevice.replace(/^dev-/, "")) + '” 기록만 표시 중</p>' : "") +
+      '<div class="event-list">' + rows + "</div></div>";
   }
 
   /* ---------- 정류장 검색 (관리자 설정) ---------- */
@@ -2051,14 +2127,38 @@
       case "kpi":
         state.kpi = null;
         state.kpiError = "";
+        state.events = null;
         setScreen("kpi");
         loadKpi();
+        loadEvents();
         break;
       case "kpi-refresh":
         state.kpi = null;
         state.kpiError = "";
+        state.events = null;
         render();
         loadKpi();
+        loadEvents();
+        break;
+      case "events-refresh":
+        state.events = null;
+        render();
+        loadEvents();
+        break;
+      case "events-device":
+        state.eventsDevice = btn.getAttribute("data-device") || "";
+        state.events = null;
+        render();
+        loadEvents();
+        break;
+      case "events-alldevice":
+        state.eventsDevice = "";
+        state.events = null;
+        render();
+        loadEvents();
+        break;
+      case "event-delete":
+        deleteEvent(btn.getAttribute("data-id"));
         break;
       case "station": setScreen("station"); break;
       case "language": setScreen("language"); break;
