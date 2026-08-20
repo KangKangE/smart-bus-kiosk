@@ -501,8 +501,21 @@
     var s = state.settings;
     state.routeError = "";
     state.destConfirm = null;
+    var hasCoords = !!(coords && coords.x && coords.y);
+    // 목적지 이름: 입력값이 비면 후보 이름으로 대체
+    var q = ((destText || (coords && coords.name) || "")).trim();
+    // 목적지도 좌표도 없으면 검색하지 않고 다시 물어봄
+    if (!q && !hasCoords) {
+      state.routeLoading = false;
+      state.route = null;
+      state.routeError = state.language === "KO"
+        ? "목적지를 알아듣지 못했어요. 어디로 가실지 다시 말씀하거나 입력해 주세요."
+        : "I didn't catch the destination. Please say or type where you want to go.";
+      setScreen("routes");
+      return;
+    }
     // 같은 목적지+옵션은 캐시 사용 (ODsay 무료 사용량 절약)
-    var cacheKey = (coords && coords.name ? coords.name : destText) + "|" + (pref || "simple") + "|" + s.stationId;
+    var cacheKey = q + "|" + (pref || "simple") + "|" + s.stationId;
     if (routeCache[cacheKey]) {
       state.routeLoading = false;
       state.route = routeCache[cacheKey];
@@ -515,11 +528,11 @@
     state.routeLoading = true;
     state.route = null;
     setScreen("routes");
-    var qs = "dest=" + encodeURIComponent(destText) + "&pref=" + (pref || "simple");
-    if (coords && coords.x && coords.y) {
+    var qs = "dest=" + encodeURIComponent(q || (coords && coords.name) || "목적지") + "&pref=" + (pref || "simple");
+    if (hasCoords) {
       qs += "&destX=" + encodeURIComponent(coords.x) +
         "&destY=" + encodeURIComponent(coords.y) +
-        "&destName=" + encodeURIComponent(coords.name || destText);
+        "&destName=" + encodeURIComponent(coords.name || q);
     }
     if (s.lng && s.lat) {
       qs += "&sx=" + encodeURIComponent(s.lng) + "&sy=" + encodeURIComponent(s.lat) +
