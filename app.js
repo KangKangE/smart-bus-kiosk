@@ -383,6 +383,10 @@
       render();
       return;
     }
+    loadBusRouteStops(bus, s, 0);
+  }
+
+  function loadBusRouteStops(bus, s, attempt) {
     fetch("/api/find-station?cityCode=" + encodeURIComponent(s.cityCode) + "&routeId=" + encodeURIComponent(bus.routeId))
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -404,6 +408,10 @@
         if (state.screen === "busRoute") render();
       })
       .catch(function () {
+        if (attempt < 2 && state.screen === "busRoute") {
+          window.setTimeout(function () { loadBusRouteStops(bus, s, attempt + 1); }, 500);
+          return;
+        }
         state.busRouteError = "노선도를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.";
         if (state.screen === "busRoute") render();
       });
