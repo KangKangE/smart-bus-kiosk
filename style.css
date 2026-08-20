@@ -1207,6 +1207,20 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 .candidate-list strong { font-size: 20px; font-weight: 820; }
 .candidate-list span { color: var(--muted); font-size: 14px; font-weight: 600; }
 .confirm-actions { display: flex; gap: 12px; margin-top: 20px; justify-content: center; }
+.confirm-listening {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-radius: 100px;
+  padding: 11px 18px;
+  font-size: 17px;
+  font-weight: 800;
+  margin-bottom: 14px;
+  animation: 1.6s ease-in-out infinite pulse;
+}
 
 /* KPI 대시보드 */
 .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }

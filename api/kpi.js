@@ -41,6 +41,12 @@ export default async function handler(req, res) {
     const selects = rows.filter((e) => e.event_type === "route_select");
     const selTop = selects.filter((e) => Number(e.payload && e.payload.index) === 0).length;
 
+    // 목적지 음성 확인 = 길찾기 음성 인식 성공 검증
+    const confRows = rows.filter((e) => e.event_type === "dest_confirm_result");
+    const confConfirmed = confRows.filter((e) => e.payload && e.payload.result === "confirmed").length;
+    const confCorrected = confRows.filter((e) => e.payload && e.payload.result === "corrected").length;
+    const confRejected = confRows.filter((e) => e.payload && e.payload.result === "rejected").length;
+
     const ratingRows = rows.filter((e) => e.event_type === "rating");
     const stars = ratingRows
       .map((e) => Number(e.payload && e.payload.stars))
@@ -79,6 +85,16 @@ export default async function handler(req, res) {
           successRate: pct(rs, rs + rf),
           selects: selects.length,
           topPickRate: pct(selTop, selects.length)
+        },
+        destConfirm: {
+          total: confRows.length,
+          confirmed: confConfirmed,
+          corrected: confCorrected,
+          rejected: confRejected,
+          // 인식 성공 = 후보 안에서 목적지를 찾음(첫 제안 또는 보정)
+          recogRate: pct(confConfirmed + confCorrected, confRows.length),
+          // 첫 제안 정확도 = 바로 '네'로 확정된 비율
+          topRate: pct(confConfirmed, confRows.length)
         },
         rating: {
           count: stars.length,

@@ -221,6 +221,7 @@
     rated: {},               // 만족도 평가 완료 여부 (중복 방지)
     ratingStars: {},         // 제출 전 선택한 별점 (화면별)
     destConfirm: null,       // 목적지 확인 단계 {query, pref, candidates}
+    confirmListening: false, // 목적지 확인 화면에서 예/아니오 음성을 듣는 중
     kpi: null,               // KPI 집계 결과
     kpiError: "",
     settings: Object.assign({}, DEFAULT_SETTINGS)
@@ -443,11 +444,62 @@
       });
   }
 
+  /* ---------- 음성 출력이 끝난 뒤에 듣기 시작 (TTS가 마이크에 섞이지 않도록) ---------- */
+  function speakThen(text, onDone) {
+    var started = false;
+    var go = function () { if (started) return; started = true; onDone(); };
+    if (!("speechSynthesis" in window)) { go(); return; }
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = localeFor(state.language);
+    u.rate = 0.86;
+    u.onend = go;
+    u.onerror = go;
+    window.speechSynthesis.speak(u);
+    // onend가 안 오는 브라우저 대비 폴백 (실제 발화보다 넉넉히)
+    window.setTimeout(go, Math.min(13000, 3600 + text.length * 95));
+  }
+
+  function stopRecognition() {
+    if (recognitionRef) { try { recognitionRef.stop(); } catch (e) {} recognitionRef = null; }
+    state.confirmListening = false;
+  }
+
+  /* 목적지 확인 화면에서 예/아니오·후보 이름을 듣는다 (화면 전환 없이) */
+  function listenOnConfirm() {
+    if (!state.destConfirm) return;
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) return; // 음성 불가 기기 → 버튼으로 선택
+    var rec = new Recognition();
+    rec.lang = localeFor(state.language);
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = function (e) {
+      var text = e.results[0][0].transcript;
+      var confidence = e.results[0][0].confidence;
+      logEvent("voice_result", {
+        transcript: text,
+        confidence: typeof confidence === "number" ? Math.round(confidence * 100) / 100 : null,
+        context: "confirm"
+      });
+      state.confirmListening = false;
+      handleConfirmVoice(text);
+    };
+    rec.onerror = function () { state.confirmListening = false; if (state.screen === "routes") render(); };
+    rec.onend = function () { recognitionRef = null; if (state.confirmListening) { state.confirmListening = false; if (state.screen === "routes") render(); } };
+    recognitionRef = rec;
+    state.confirmListening = true;
+    try { rec.start(); if (state.screen === "routes") render(); }
+    catch (e) { state.confirmListening = false; }
+  }
+
   /* ---------- 목적지 확인 단계 (음성 인식 오류 보완) ----------
      음성으로 들은 목적지의 후보 장소들을 보여주고
      "이 도착지가 맞나요?"를 확인받은 뒤 경로를 검색한다 */
   function confirmDestination(query, pref) {
     var s = state.settings;
+    stopRecognition();
     state.routeLoading = false;
     state.route = null;
     state.routeError = "";
@@ -465,12 +517,15 @@
         setScreen("routes", true);
         var first = d.places[0].name;
         logEvent("dest_confirm_shown", { query: query, first: first, count: d.places.length });
-        speak({
-          KO: "말씀하신 목적지가 " + first + " 맞나요? 맞으면 '네, 맞아요'를 누르거나 말씀해 주세요. 아니라면 아래 목록에서 골라주세요.",
-          EN: "Did you mean " + first + "? Tap yes or say yes, or choose from the list below.",
-          JA: "目的地は" + first + "でよろしいですか？下のリストからも選べます。",
-          ZH: "您的目的地是" + first + "吗？也可以从下面的列表中选择。"
-        }[state.language]);
+        // 질문을 말한 뒤(음성이 끝난 뒤에) 예/아니오를 듣는다
+        speakThen({
+          KO: "말씀하신 목적지가 " + first + " 맞나요? 맞으면 '네'라고, 아니면 '아니요'라고 말씀하시거나 아래 목록에서 골라주세요.",
+          EN: "Did you mean " + first + "? Say yes or no, or choose from the list below.",
+          JA: "目的地は" + first + "でよろしいですか？「はい」か「いいえ」でお答えいただくか、下のリストから選んでください。",
+          ZH: "您的目的地是" + first + "吗？请说“是”或“不是”，也可以从下面的列表中选择。"
+        }[state.language], function () {
+          if (state.destConfirm && state.screen === "routes") listenOnConfirm();
+        });
       })
       .catch(function () { performRouteSearch(query, pref); });
   }
@@ -478,19 +533,52 @@
   function pickCandidate(idx, how) {
     var dc = state.destConfirm;
     if (!dc || !dc.candidates[idx]) return;
+    stopRecognition();
     var c = dc.candidates[idx];
     logEvent("dest_pick", { index: idx, name: c.name, query: dc.query, how: how || "tap" });
+    // 목적지 확인 = 음성 인식 성공 검증: 첫 제안 채택은 정확, 다른 후보는 보정
+    logEvent("dest_confirm_result", { result: idx === 0 ? "confirmed" : "corrected", index: idx, how: how || "tap" });
     performRouteSearch(dc.query, dc.pref, c);
+  }
+
+  /* '아니요' → 목적지를 다시 말하도록 안내하고 듣기 */
+  function reAskDestination() {
+    var dc = state.destConfirm;
+    logEvent("dest_confirm_result", { result: "rejected", query: dc ? dc.query : "" });
+    stopRecognition();
+    state.destConfirm = null;
+    state.transcript = "";
+    state.screen = "listening";
+    render();
+    speakThen({
+      KO: "다시 어디로 가실지 말씀해 주세요.",
+      EN: "Please say your destination again.",
+      JA: "行き先をもう一度お話しください。",
+      ZH: "请再说一次您的目的地。"
+    }[state.language], function () {
+      if (state.screen === "listening") startRecognitionCore();
+    });
+  }
+
+  function isYes(t) {
+    var w = ["네", "네네", "예", "맞아", "맞어", "맞습니다", "맞아요", "응", "그래", "좋아", "yes", "yeah", "yep", "correct", "right", "はい", "そう", "对", "是的", "对的"];
+    for (var i = 0; i < w.length; i++) if (t.indexOf(w[i]) !== -1) return true;
+    return false;
+  }
+  function isNo(t) {
+    var w = ["아니", "아뇨", "아니요", "아니에요", "틀려", "틀렸", "no", "nope", "wrong", "いいえ", "違う", "ちがう", "不是", "不对", "错"];
+    for (var i = 0; i < w.length; i++) if (t.indexOf(w[i]) !== -1) return true;
+    return false;
   }
 
   function handleConfirmVoice(text) {
     var dc = state.destConfirm;
     if (!dc) return;
     var t = text.toLowerCase().replace(/\s/g, "");
-    var yesWords = ["네", "예", "맞아", "맞어", "맞습니다", "응", "그래", "yes", "yeah", "correct", "はい", "そうです", "对", "是的"];
-    for (var y = 0; y < yesWords.length; y++) {
-      if (t.indexOf(yesWords[y]) !== -1) { pickCandidate(0, "voice-yes"); return; }
-    }
+    // 명확한 '아니요' → 목적지 다시 받기
+    if (isNo(t) && !isYes(t)) { reAskDestination(); return; }
+    // 명확한 '네' → 첫 제안 채택
+    if (isYes(t)) { pickCandidate(0, "voice-yes"); return; }
     // 후보 이름과 두 글자씩 겹치는 정도로 가장 비슷한 후보 선택
     var best = -1, bestScore = 0;
     dc.candidates.forEach(function (c, i) {
@@ -503,7 +591,8 @@
       if (score > bestScore) { bestScore = score; best = i; }
     });
     if (best >= 0 && bestScore >= 0.3) { pickCandidate(best, "voice-match"); return; }
-    // 후보와 전혀 다른 말이면 새 목적지로 다시 확인
+    // 후보와 전혀 다른 말이면 새 목적지로 다시 확인 (보정 시도로 기록)
+    logEvent("dest_confirm_result", { result: "rejected", query: dc.query, reason: "different" });
     confirmDestination(text, dc.pref);
   }
 
@@ -825,6 +914,7 @@
           tile("음성 인식 성공률", fmtPct(k.voice.successRate), "시도 " + k.voice.attempts + "회 · 평균 신뢰도 " + (k.voice.avgConfidence == null ? "—" : k.voice.avgConfidence + "%")) +
           tile("AI 의도 파악", k.ai.calls + "건", "평균 응답 " + (k.ai.avgMs == null ? "—" : k.ai.avgMs + "ms") + " · 대체동작 " + fmtPct(k.ai.fallbackRate)) +
           tile("길찾기 성공률", fmtPct(k.route.successRate), "성공 " + k.route.searches + " · 실패 " + k.route.fails) +
+          tile("목적지 음성 확인 성공률", fmtPct(k.destConfirm.recogRate), "확인 " + k.destConfirm.total + "회 · 첫 제안 정확 " + fmtPct(k.destConfirm.topRate) + " · 재요청 " + k.destConfirm.rejected) +
           tile("추천 경로 채택률", fmtPct(k.route.topPickRate), "경로 상세보기 " + k.route.selects + "회") +
           tile("만족도 (5점 만점)", (k.rating.avg == null ? "—" : k.rating.avg.toFixed(2) + "점"), "평가 " + k.rating.count + "건") +
         "</div>" +
@@ -1123,7 +1213,13 @@
     }
     state.voiceSupported = true;
     render();
+    startRecognitionCore();
+  }
 
+  /* 인식 시작(핵심) — 화면 전환·음성 정지는 호출부에서 처리 */
+  function startRecognitionCore() {
+    var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) { state.voiceSupported = false; render(); return; }
     var rec = new Recognition();
     rec.lang = localeFor(state.language);
     rec.continuous = false;
@@ -1388,6 +1484,13 @@
             '<p class="eyebrow">' + (ko ? "목적지 확인 · “" + dc.query + "”" : "Confirm · “" + dc.query + "”") + "</p>" +
             "<h1>" + (ko ? "이 도착지가 맞나요?" : state.language === "JA" ? "この目的地でよろしいですか？" : state.language === "ZH" ? "是这个目的地吗？" : "Is this your destination?") + "</h1>" +
           "</div></div>" +
+          (state.confirmListening
+            ? '<div class="confirm-listening">' + icon("mic", 22) +
+                (ko ? "듣고 있어요 · “네” 또는 “아니요”라고 말씀해 주세요"
+                    : state.language === "JA" ? "聞いています · 「はい」か「いいえ」"
+                    : state.language === "ZH" ? "正在聆听 · 请说“是”或“不是”"
+                    : "Listening · say “yes” or “no”") + "</div>"
+            : "") +
           '<div class="confirm-card">' +
             "<div><strong>" + first.name + "</strong><p>" + (first.address || "") + "</p></div>" +
             '<button class="primary-button" data-action="dest-pick" data-idx="0">' + icon("check", 26) + (ko ? "네, 맞아요" : "Yes") + "</button>" +
@@ -1399,7 +1502,7 @@
               }).join("") + "</div>"
             : "") +
           '<div class="confirm-actions">' +
-            '<button class="secondary-button" data-action="listen">' + icon("mic", 24) + (ko ? "다시 말하기" : "Speak again") + "</button>" +
+            '<button class="secondary-button" data-action="confirm-listen">' + icon("mic", 24) + (ko ? "다시 듣기" : "Listen again") + "</button>" +
             '<button class="secondary-button" data-action="dest-cancel">' + icon("x", 24) + (ko ? "처음부터" : "Cancel") + "</button>" +
           "</div>" +
         "</div>"
@@ -1886,7 +1989,11 @@
       case "dest-pick":
         pickCandidate(parseInt(btn.getAttribute("data-idx"), 10) || 0, "tap");
         break;
+      case "confirm-listen":
+        listenOnConfirm();
+        break;
       case "dest-cancel":
+        stopRecognition();
         state.destConfirm = null;
         setScreen("routes");
         break;
