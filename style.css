@@ -622,7 +622,7 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
 .current-step { color: var(--blue); background: var(--blue-soft); }
 .walk-step { color: #8f5e00; background: #fff1ce; }
 
-.journey-step div span { color: var(--blue); font-size: 15px; font-weight: 800; display: block; }
+.journey-step div span { color: var(--ink); font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 6px; }
 .journey-step div strong { margin-top: 4px; font-size: 24px; font-weight: 850; display: block; }
 .journey-step div p { color: var(--muted); margin: 7px 0 0; font-size: 16px; font-weight: 600; }
 

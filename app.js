@@ -227,6 +227,7 @@
     kpiError: "",
     events: null,            // 최근 이벤트 목록 (개별 삭제용)
     eventsDevice: "",        // 특정 사용자(기기)만 보기 필터
+    recording: false,        // Gemini 오디오 녹음 중 (완료 버튼 표시용)
     settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
@@ -300,12 +301,15 @@
   }
 
   function speak(text) {
-    if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
+    if (!("speechSynthesis" in window) || !text) return;
+    try { window.speechSynthesis.cancel(); } catch (e) {}
     var u = new SpeechSynthesisUtterance(text);
     u.lang = localeFor(state.language);
     u.rate = 0.86;
-    window.speechSynthesis.speak(u);
+    // cancel() 직후 speak()를 바로 부르면 크롬에서 소리가 안 나는 버그가 있어 약간 지연
+    window.setTimeout(function () {
+      try { window.speechSynthesis.speak(u); window.speechSynthesis.resume(); } catch (e) {}
+    }, 70);
   }
 
   /* ---------- 실시간 버스 도착 데이터 (Vercel 프록시 /api/arrivals) ---------- */
@@ -392,12 +396,25 @@
     return r.paths[r.selected || 0];
   }
 
+  var routeCache = {};
+
   function performRouteSearch(destText, pref, coords) {
     var s = state.settings;
-    state.routeLoading = true;
     state.routeError = "";
-    state.route = null;
     state.destConfirm = null;
+    // 같은 목적지+옵션은 캐시 사용 (ODsay 무료 사용량 절약)
+    var cacheKey = (coords && coords.name ? coords.name : destText) + "|" + (pref || "simple") + "|" + s.stationId;
+    if (routeCache[cacheKey]) {
+      state.routeLoading = false;
+      state.route = routeCache[cacheKey];
+      state.route.selected = 0;
+      addRecentDest(state.route.destination);
+      setScreen("routes");
+      speakRouteSummary();
+      return;
+    }
+    state.routeLoading = true;
+    state.route = null;
     setScreen("routes");
     var qs = "dest=" + encodeURIComponent(destText) + "&pref=" + (pref || "simple");
     if (coords && coords.x && coords.y) {
@@ -416,8 +433,13 @@
       .then(function (data) {
         state.routeLoading = false;
         if (!data || !data.ok || !data.paths || !data.paths.length) {
-          state.routeError = (data && data.error) || "경로를 찾지 못했습니다.";
-          logEvent("route_search_fail", { query: destText, error: state.routeError });
+          var raw = (data && data.error) || "";
+          state.routeError = /quota|exceeded|할당량/i.test(raw)
+            ? "오늘 경로 검색 무료 사용량을 모두 사용했어요. 잠시 후(내일) 다시 이용해 주세요."
+            : /장소를 찾지|not found|찾지 못/i.test(raw)
+              ? "그 목적지를 찾지 못했어요. 더 정확한 이름으로 다시 말씀해 주세요."
+              : (raw || "경로를 찾지 못했습니다.");
+          logEvent("route_search_fail", { query: destText, error: raw || "unknown" });
           if (state.screen === "routes") render();
           return;
         }
@@ -429,6 +451,7 @@
           paths: sortPaths(data.paths, pref),
           selected: 0
         };
+        routeCache[cacheKey] = state.route;   // 같은 목적지 재검색 시 ODsay 호출 아낌
         addRecentDest(data.destination.name);
         logEvent("route_search", {
           query: destText,
@@ -1079,6 +1102,36 @@
       "- speech: 반드시 " + langName + "(으)로, 노약자가 이해하기 쉬운 1~3개의 짧은 문장으로 답하세요.";
   }
 
+  // Gemini 결과(의도)를 화면/음성에 반영 — 텍스트 STT·오디오 인식 공용
+  function applyIntent(result, userText, t0, source) {
+    logEvent("ai_intent", {
+      query: userText,
+      screen: result.screen || "",
+      destination: result.destination || "",
+      routePref: result.routePref || "",
+      source: source || "stt",
+      ms: Date.now() - t0
+    });
+    var q = Number(result.sttQuality);
+    if (isFinite(q) && q >= 1 && q <= 5) {
+      logEvent("stt_quality", {
+        query: userText,
+        quality: Math.round(q),
+        clear: result.sttClear !== false && q >= 3,
+        source: source || "stt"
+      });
+    }
+    var routeAsk = /(어떻게 가|가는 ?법|가고 ?싶|까지|가려면|how (do|can) i get|way to|行き方|怎么去)/i.test(userText || "");
+    if (result.screen === "home" && (result.destination || routeAsk)) result.screen = "routes";
+    if (result.screen === "routes" && result.destination) {
+      confirmDestination(result.destination, result.routePref === "fast" ? "fast" : "simple");
+      return;
+    }
+    var valid = ["arrival", "routes", "routeDetail", "station", "home"];
+    setScreen(valid.indexOf(result.screen) !== -1 ? result.screen : "routes", !!result.speech);
+    if (result.speech) speak(result.speech);
+  }
+
   function askGemini(userText) {
     var token = ++aiRequestToken;
     var t0 = Date.now();
@@ -1096,41 +1149,165 @@
       })
       .then(function (result) {
         if (token !== aiRequestToken || state.screen !== "listening") return;
-        logEvent("ai_intent", {
-          query: userText,
-          screen: result.screen || "",
-          destination: result.destination || "",
-          routePref: result.routePref || "",
-          ms: Date.now() - t0
-        });
-        // Gemini가 STT 인식 문장의 자연스러움을 판정 → 진짜 인식 품질 지표
-        var q = Number(result.sttQuality);
-        if (isFinite(q) && q >= 1 && q <= 5) {
-          logEvent("stt_quality", {
-            query: userText,
-            quality: Math.round(q),
-            clear: result.sttClear !== false && q >= 3
-          });
-        }
-        // 안전장치: 길찾기 표현이 있는데 home으로 분류됐다면 routes로 교정
-        var routeAsk = /(어떻게 가|가는 ?법|가고 ?싶|까지|가려면|how (do|can) i get|way to|行き方|怎么去)/i.test(userText);
-        if (result.screen === "home" && (result.destination || routeAsk)) {
-          result.screen = "routes";
-        }
-        if (result.screen === "routes" && result.destination) {
-          confirmDestination(result.destination, result.routePref === "fast" ? "fast" : "simple");
-          return;
-        }
-        var valid = ["arrival", "routes", "routeDetail", "station", "home"];
-        setScreen(valid.indexOf(result.screen) !== -1 ? result.screen : "routes", !!result.speech);
-        if (result.speech) speak(result.speech);
+        applyIntent(result, userText, t0, "stt");
       })
       .catch(function () {
-        /* 키 오류·네트워크 오류 시 키워드 방식으로 대체 */
         if (token !== aiRequestToken || state.screen !== "listening") return;
         logEvent("ai_fallback", { query: userText, ms: Date.now() - t0 });
         interpretCommand(userText);
       });
+  }
+
+  /* ---------- Gemini 오디오 인식 (브라우저 STT 대신 녹음→Gemini 전사+의도) ----------
+     Gemini는 webm을 안 받아 WAV(16kHz 모노)로 변환해 보낸다.
+     녹음 실패·미지원·오류 시에는 브라우저 STT로 자동 대체 */
+  var mediaStream = null, mediaRecorder = null, audioChunks = [], recAudioCtx = null;
+  var recSilenceTimer = null, recMaxTimer = null, recSpoke = false;
+
+  function stopGeminiVoice() {
+    try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch (e) {}
+  }
+
+  function cleanupRec() {
+    state.recording = false;
+    if (recSilenceTimer) { clearInterval(recSilenceTimer); recSilenceTimer = null; }
+    if (recMaxTimer) { clearTimeout(recMaxTimer); recMaxTimer = null; }
+    if (mediaStream) { try { mediaStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} mediaStream = null; }
+    if (recAudioCtx) { try { recAudioCtx.close(); } catch (e) {} recAudioCtx = null; }
+  }
+
+  function startGeminiVoice() {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined" ||
+        !(window.AudioContext || window.webkitAudioContext)) {
+      startListening(); // 녹음 미지원 → STT
+      return;
+    }
+    state.transcript = "";
+    state.screen = "listening";
+    state.voiceSupported = true;
+    render();
+
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      mediaStream = stream;
+      audioChunks = [];
+      recSpoke = false;
+      var token = ++aiRequestToken;
+
+      var mime = "";
+      ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].some(function (m) {
+        if (MediaRecorder.isTypeSupported(m)) { mime = m; return true; } return false;
+      });
+      mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size) audioChunks.push(e.data); };
+      mediaRecorder.onstop = function () {
+        cleanupRec();
+        if (token !== aiRequestToken) return;
+        var blob = new Blob(audioChunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
+        if (!blob.size) { interpretFallback(token); return; }
+        state.transcript = state.language === "KO" ? "인식하는 중…" : "Recognizing…";
+        render();
+        blobToWav(blob).then(function (wavB64) {
+          sendAudioToGemini(wavB64, token);
+        }).catch(function () { interpretFallback(token); });
+      };
+
+      // 무음 감지 자동 종료
+      var AC = window.AudioContext || window.webkitAudioContext;
+      recAudioCtx = new AC();
+      var src = recAudioCtx.createMediaStreamSource(stream);
+      var analyser = recAudioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      var buf = new Uint8Array(analyser.frequencyBinCount);
+      var quietMs = 0;
+      recSilenceTimer = window.setInterval(function () {
+        analyser.getByteTimeDomainData(buf);
+        var sum = 0;
+        for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
+        var rms = Math.sqrt(sum / buf.length);
+        if (rms > 0.045) { recSpoke = true; quietMs = 0; }
+        else if (recSpoke) {
+          quietMs += 150;
+          if (quietMs >= 1100) stopGeminiVoice(); // 말 끝난 뒤 약 1.1초 침묵이면 종료
+        }
+      }, 150);
+      recMaxTimer = window.setTimeout(stopGeminiVoice, 9000); // 최대 9초
+
+      mediaRecorder.start();
+      state.recording = true;
+      if (state.screen === "listening") render();
+    }).catch(function () {
+      cleanupRec();
+      startListening(); // 마이크 권한 거부 등 → STT
+    });
+  }
+
+  function interpretFallback(token) {
+    if (token !== aiRequestToken) return;
+    logEvent("voice_error", { error: "audio-empty" });
+    startListening();
+  }
+
+  function sendAudioToGemini(wavB64, token) {
+    var t0 = Date.now();
+    geminiCall({
+      systemInstruction: { parts: [{ text: buildGeminiSystemPrompt() +
+        "\n\n[중요] 아래는 사용자의 실제 음성입니다. 먼저 음성을 정확히 받아쓰고(transcript), 지명·버스번호 같은 고유명사는 한국 지명 기준으로 가장 그럴듯하게 판단하세요. 그런 다음 위 규칙대로 JSON을 만드세요. JSON에 \"transcript\" 항목(받아쓴 문장)도 반드시 포함하세요." }] },
+      contents: [{ role: "user", parts: [
+        { inlineData: { mimeType: "audio/wav", data: wavB64 } },
+        { text: "이 음성을 처리해 주세요." }
+      ] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+    })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+      .then(function (data) { return JSON.parse(data.candidates[0].content.parts[0].text); })
+      .then(function (result) {
+        if (token !== aiRequestToken || state.screen !== "listening") return;
+        var transcript = result.transcript || "";
+        logEvent("voice_result", { transcript: transcript, confidence: null, source: "gemini-audio" });
+        state.transcript = transcript;
+        render();
+        applyIntent(result, transcript, t0, "gemini-audio");
+      })
+      .catch(function () {
+        if (token !== aiRequestToken || state.screen !== "listening") return;
+        startListening(); // Gemini 오디오 실패 → STT 대체
+      });
+  }
+
+  // webm/ogg Blob → 16kHz 모노 16bit WAV(base64)
+  function blobToWav(blob) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    var ctx = new AC();
+    return blob.arrayBuffer().then(function (ab) {
+      return ctx.decodeAudioData(ab);
+    }).then(function (audioBuf) {
+      var ch0 = audioBuf.getChannelData(0);
+      var srcRate = audioBuf.sampleRate, dstRate = 16000;
+      var ratio = srcRate / dstRate;
+      var outLen = Math.floor(ch0.length / ratio);
+      var pcm = new Int16Array(outLen);
+      for (var i = 0; i < outLen; i++) {
+        var s = ch0[Math.floor(i * ratio)] || 0;
+        s = Math.max(-1, Math.min(1, s));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      try { ctx.close(); } catch (e) {}
+      // WAV 헤더
+      var bytes = new Uint8Array(44 + pcm.length * 2);
+      var dv = new DataView(bytes.buffer);
+      function ws(off, str) { for (var k = 0; k < str.length; k++) dv.setUint8(off + k, str.charCodeAt(k)); }
+      ws(0, "RIFF"); dv.setUint32(4, 36 + pcm.length * 2, true); ws(8, "WAVE");
+      ws(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, dstRate, true); dv.setUint32(28, dstRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+      ws(36, "data"); dv.setUint32(40, pcm.length * 2, true);
+      for (var j = 0; j < pcm.length; j++) dv.setInt16(44 + j * 2, pcm[j], true);
+      // base64 인코딩
+      var bin = "";
+      for (var b = 0; b < bytes.length; b++) bin += String.fromCharCode(bytes[b]);
+      return btoa(bin);
+    });
   }
 
   function setScreen(next, silent) {
@@ -1377,8 +1554,17 @@
     }
   }
 
+  // 마이크: Gemini가 켜져 있으면 오디오 인식, 아니면 브라우저 STT
+  function beginVoice() {
+    if (state.geminiAvailable) startGeminiVoice();
+    else startListening();
+  }
+
   function cancelListening() {
-    if (recognitionRef) recognitionRef.stop();
+    aiRequestToken++;               // 진행 중인 인식 결과 무시
+    stopGeminiVoice();
+    cleanupRec();
+    if (recognitionRef) { try { recognitionRef.stop(); } catch (e) {} }
     recognitionRef = null;
     setScreen("home");
   }
@@ -1489,6 +1675,9 @@
         '<p class="eyebrow">' + (heard ? (ko ? "이렇게 들었어요" : "I heard") : t.listenStatus) + "</p>" +
         "<h1>" + (heard ? "“" + heard + "”" : t.listening) + "</h1>" +
         '<p class="listening-copy">' + (heard ? (ko ? "가장 알맞은 정보를 찾고 있어요." : "Finding the best answer…") : t.listeningHint) + "</p>" +
+        (state.recording
+          ? '<button class="example-chip" data-action="voice-stop">' + (ko ? "✓ 말 다 했어요" : "✓ Done speaking") + "</button>"
+          : "") +
         (!state.voiceSupported
           ? '<p class="support-note">' + (ko ? "이 기기에서는 예시 질문을 눌러 화면을 체험할 수 있어요." : "Voice input is unavailable here. Choose a sample question below.") + "</p>"
           : "") +
@@ -2101,7 +2290,8 @@
     switch (btn.getAttribute("data-action")) {
       case "home": goHome(); break;
       case "back": goBack(); break;
-      case "listen": startListening(); break;
+      case "listen": beginVoice(); break;
+      case "voice-stop": stopGeminiVoice(); break;
       case "cancel": cancelListening(); break;
       case "arrival": setScreen("arrival"); break;
       case "arrival-voice": openArrivalWithVoice(); break;
