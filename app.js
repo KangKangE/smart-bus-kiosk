@@ -728,6 +728,22 @@
         }
       }
 
+      // 목적지 확인 화면: 가장 유력한 후보 위치를 지도로 표시
+      if (state.screen === "routes" && state.destConfirm && state.destConfirm.candidates[0]) {
+        var elc = document.querySelector(".confirm-map");
+        var c0 = state.destConfirm.candidates[0];
+        var clat = parseFloat(c0.y), clng = parseFloat(c0.x);
+        if (elc && isFinite(clat) && isFinite(clng)) {
+          elc.classList.add("real-map");
+          elc.innerHTML = "";
+          var cpos = new kakao.maps.LatLng(clat, clng);
+          var cmap = new kakao.maps.Map(elc, { center: cpos, level: 4 });
+          cmap.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+          new kakao.maps.Marker({ position: cpos, map: cmap });
+          new kakao.maps.CustomOverlay({ position: cpos, content: mapLabel(c0.name), yAnchor: 2.4 }).setMap(cmap);
+        }
+      }
+
       if (state.screen === "routeDetail" && state.route && state.route.dest && state.route.start) {
         var el2 = document.querySelector(".route-map");
         var r = state.route;
@@ -1803,13 +1819,22 @@
                     : "Listening · say “yes” or “no”") + "</div>"
             : "") +
           '<div class="confirm-card">' +
-            "<div><strong>" + first.name + "</strong><p>" + (first.address || "") + "</p></div>" +
-            '<button class="primary-button" data-action="dest-pick" data-idx="0">' + icon("check", 26) + (ko ? "네, 맞아요" : "Yes") + "</button>" +
+            '<div class="confirm-map" aria-label="' + esc(first.name) + ' 위치 지도"></div>' +
+            '<div class="confirm-info">' +
+              '<span class="confirm-badge">' + icon("location", 20) + (ko ? "가장 가까운 곳" : "Best match") + "</span>" +
+              "<strong>" + esc(first.name) + "</strong>" +
+              '<p class="confirm-addr">' + esc(first.address || (ko ? "주소 정보 없음" : "No address")) + "</p>" +
+              (first.category ? '<p class="confirm-cat">' + esc(first.category) + "</p>" : "") +
+              '<button class="primary-button" data-action="dest-pick" data-idx="0">' + icon("check", 26) + (ko ? "네, 여기 맞아요" : "Yes, this one") + "</button>" +
+            "</div>" +
           "</div>" +
           (others.length
-            ? '<p class="recent-title">' + (ko ? "아니라면 여기서 누르거나 말씀해 주세요" : "Or choose / say one below") + "</p>" +
+            ? '<p class="recent-title">' + (ko ? "아니라면 아래에서 누르거나 말씀해 주세요" : "Or choose / say one below") + "</p>" +
               '<div class="candidate-list">' + others.map(function (p, oi) {
-                return '<button data-action="dest-pick" data-idx="' + (oi + 1) + '"><strong>' + p.name + "</strong><span>" + (p.address || "") + "</span></button>";
+                return '<button data-action="dest-pick" data-idx="' + (oi + 1) + '">' +
+                  "<strong>" + esc(p.name) + "</strong>" +
+                  "<span>" + icon("location", 15) + esc(p.address || "") + "</span>" +
+                  "</button>";
               }).join("") + "</div>"
             : "") +
           '<div class="confirm-actions">' +

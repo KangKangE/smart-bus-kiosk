@@ -1178,17 +1178,39 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   border: 3px solid var(--blue);
   background: #fff;
   border-radius: 26px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  padding: 24px 26px;
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 22px;
+  padding: 20px;
   margin-bottom: 18px;
   box-shadow: 0 10px 28px #0b4dc91a;
 }
-.confirm-card strong { font-size: 30px; font-weight: 850; display: block; word-break: keep-all; }
-.confirm-card p { color: var(--muted); margin: 6px 0 0; font-size: 16px; font-weight: 600; }
-.confirm-card .primary-button { flex: none; }
+.confirm-map {
+  min-height: 260px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #e8ecf1;
+  border: 1px solid var(--line);
+}
+.confirm-info { display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; }
+.confirm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 800;
+  padding: 5px 12px;
+  border-radius: 100px;
+  margin-bottom: 4px;
+}
+.confirm-info strong { font-size: 30px; font-weight: 850; word-break: keep-all; line-height: 1.2; }
+.confirm-addr { color: var(--ink); margin: 6px 0 0; font-size: 18px; font-weight: 700; word-break: keep-all; }
+.confirm-cat { color: var(--muted); margin: 2px 0 0; font-size: 15px; font-weight: 600; }
+.confirm-info .primary-button { margin-top: 14px; }
+.candidate-list span svg { display: inline; vertical-align: -2px; margin-right: 3px; }
 .candidate-list { display: grid; gap: 10px; }
 .candidate-list button {
   border: 2px solid var(--line);
@@ -1507,7 +1529,8 @@ button:focus-visible { outline-offset: 4px; outline: 5px solid #ffbf47; }
   .language-grid { grid-template-columns: repeat(2, 1fr); }
   .route-bottom { flex-direction: column; align-items: stretch; }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
-  .confirm-card { flex-direction: column; align-items: stretch; text-align: center; }
+  .confirm-card { grid-template-columns: 1fr; }
+  .confirm-map { min-height: 200px; }
 }
 
 @media (width <= 560px) {
